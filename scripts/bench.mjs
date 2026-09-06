@@ -213,6 +213,8 @@ const PROBE = String.raw`(() => {
     const realCIB = window.createImageBitmap.bind(window)
     window.createImageBitmap = function (...a) { const release = hold(); return realCIB(...a).finally(release) }
   }
+  // The document has no element yet when an init script runs, so observe the
+  // document node itself.
   new MutationObserver((muts) => {
     for (const m of muts) for (const n of m.addedNodes) {
       if (n.tagName === 'SCRIPT' && n.src) {
@@ -220,7 +222,7 @@ const PROBE = String.raw`(() => {
         n.addEventListener('load', release); n.addEventListener('error', release)
       }
     }
-  }).observe(document.documentElement, { childList: true, subtree: true })
+  }).observe(document, { childList: true, subtree: true })
 
   try {
     new PerformanceObserver((l) => { for (const e of l.getEntries()) S.longTasks.push({ t: e.startTime, d: e.duration, phase: S.phase }) }).observe({ entryTypes: ['longtask'] })
