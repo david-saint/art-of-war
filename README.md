@@ -51,6 +51,38 @@ Headless Chromium reports `prefers-reduced-motion: reduce`, which puts the site 
 static) reduced-motion path. The harness overrides it; `SHOT_REDUCED=1` puts it back if you want to
 check that path deliberately.
 
+## Performance
+
+The render layer is built so that the reader never waits and the frame never stalls. The rules, and
+the tools that keep them honest:
+
+- **The dissolve only runs where ink can land.** `InkPlane` fits its quad to the artwork's bounds and
+  tells the shader which patch of the frame it is drawing, so the fifteen-noise-lookup fragment program
+  runs on ~6% of the frame instead of all of it, with identical output.
+- **Nothing is compiled or uploaded on the frame the reader is looking at.** The canvas mounts behind
+  the opaque enter gate, so code, shaders and the hero's plates are resident before the click; the next
+  chapter's textures are decoded (on a worker, via `createImageBitmap`), mip-chained and uploaded while the
+  reader is still in this one; scene materials are `dispose={null}` so three keeps their programs.
+- **Memory has a lifetime.** `src/three/textures.ts` keeps the previous, current and next scene's
+  textures and releases everything else; decoded audio stems are capped at four resident.
+- **Nothing draws for nobody.** The loop stops in Codex Mode, behind the gate once warm, and in a
+  hidden tab. There is no MSAA: every visible edge here is texture alpha, which MSAA never touched.
+
+Measure before believing any of it:
+
+```bash
+npm run build
+npm run bench baseline            # → .bench/baseline.json + screenshots
+npm run bench after
+npm run bench:compare .bench/baseline.json .bench/after.json --md .bench/report.md
+```
+
+`scripts/bench.mjs` drives the production build through the gate, all thirteen chapters and Codex Mode
+under a virtual clock, fences every frame with a readback so main-thread and GPU cost are real, and lands
+on the same virtual frame in every run so `bench-compare` can pixel-diff two builds. To compare against
+another branch, serve it from a git worktree and point the harness at it with `BENCH_URL`. The last
+comparison is in [`docs/perf-report.md`](docs/perf-report.md).
+
 ## Layout
 
 ```
@@ -58,10 +90,12 @@ src/lib/scroll.ts        the scroll engine — the two-tier split everything dep
 src/lib/audio.ts         Web Audio: gapless beds, ducked narration, synthesised impacts
 src/lib/decision.ts      the decision-node state machine
 src/three/              the render layer — stage, camera rig, scene controller, materials
+src/three/textures.ts    the texture cache — decode off-thread, upload early, evict on schedule
+src/three/assets.ts      what every scene draws, so the next one can be warmed and the last one dropped
 src/shaders/            four custom GLSL programs
 src/data/chapters/      thirteen typed chapter modules, from the verified canon
 docs/_research/         the source research the bible was written from
-scripts/                asset generation and the screenshot harness
+scripts/                asset generation, the screenshot harness and the benchmark
 ```
 
 ## Two rules the code is built around

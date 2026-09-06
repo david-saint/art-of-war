@@ -52,8 +52,10 @@ export function ExperienceRoot() {
   const [webgl, setWebgl] = useState<boolean | null>(null)
 
   // Emitted as <link rel="preload"> in the server HTML, at low priority so the
-  // gate's own type and fonts are never behind a plate.
-  for (const url of HERO_URLS) preload(url, { as: 'fetch', fetchPriority: 'low' })
+  // gate's own type and fonts are never behind a plate. crossOrigin makes the
+  // preload's credentials mode match a plain fetch(), without which the
+  // browser fetches the plate twice.
+  for (const url of HERO_URLS) preload(url, { as: 'fetch', crossOrigin: 'anonymous', fetchPriority: 'low' })
   const setQuality = useExperience((s) => s.setQuality)
   const setReducedMotion = useExperience((s) => s.setReducedMotion)
 

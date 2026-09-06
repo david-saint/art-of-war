@@ -1,6 +1,6 @@
 'use client'
 
-import { use, useEffect } from 'react'
+import { useEffect } from 'react'
 import * as THREE from 'three'
 import { PROFILES } from './quality'
 import { useExperience } from '@/store/experience'
@@ -65,6 +65,7 @@ type Entry = {
   spec: TextureSpec
   promise: Promise<THREE.Texture>
   texture: THREE.Texture | null
+  error: unknown
   /** Decoded bitmaps owned by this entry: level 0, plus the chain if one was built. */
   bitmaps: ImageBitmap[]
   /** Components currently rendering with this texture. Never evicted while > 0. */
@@ -217,7 +218,7 @@ function request(spec: TextureSpec): Entry {
   const existing = cache.get(key)
   if (existing) return existing
 
-  const entry: Entry = { key, spec, promise: null as unknown as Promise<THREE.Texture>, texture: null, bitmaps: [], users: 0 }
+  const entry: Entry = { key, spec, promise: null as unknown as Promise<THREE.Texture>, texture: null, error: null, bitmaps: [], users: 0 }
   entry.promise = decode(spec.url, spec.mips === 'chain' && spec.kind === 'art').then(({ image, bitmaps, levels }) => {
     // The cache may have been cleared while this was in flight; do not
     // resurrect an evicted entry with a texture nobody will dispose.
@@ -225,34 +226,96 @@ function request(spec: TextureSpec): Entry {
       for (const b of bitmaps) b.close()
       throw new Error(`texture evicted while loading: ${spec.url}`)
     }
-    const texture = new THREE.Texture(image)
-    // ImageBitmaps are pre-flipped at decode; elements are flipped on upload.
-    texture.flipY = bitmaps.length === 0
-    configure(texture, spec)
-    if (levels) {
-      texture.mipmaps = levels as unknown as THREE.Texture['mipmaps']
-      texture.generateMipmaps = false
+    const external = spec.kind === 'art' && bitmaps.length > 0 ? uploadExternal(levels ?? bitmaps, spec) : null
+    let texture: THREE.Texture
+    if (external) {
+      texture = external
+    } else {
+      texture = new THREE.Texture(image)
+      // ImageBitmaps are pre-flipped at decode; elements are flipped on upload.
+      texture.flipY = bitmaps.length === 0
+      configure(texture, spec)
+      if (levels) {
+        texture.mipmaps = levels as unknown as THREE.Texture['mipmaps']
+        texture.generateMipmaps = false
+      }
+      texture.needsUpdate = true
+      // Upload ahead of the frame that will first draw it.
+      scheduleUpload(texture)
     }
-    texture.needsUpdate = true
     entry.texture = texture
     entry.bitmaps = bitmaps
-    // Upload ahead of the frame that will first draw it.
-    scheduleUpload(texture)
     return texture
   })
   // A load that fails after its component has gone would otherwise surface as
-  // an unhandled rejection; consumers still see the rejection through `use`.
-  entry.promise.catch(() => {})
+  // an unhandled rejection; consumers still see it through the hook.
+  entry.promise.catch((error) => {
+    entry.error = error
+  })
   cache.set(key, entry)
   return entry
 }
 
 function release(entry: Entry) {
   cache.delete(entry.key)
-  entry.texture?.dispose()
+  const texture = entry.texture
+  if (texture instanceof THREE.ExternalTexture && texture.sourceTexture && renderer) {
+    // three does not own this one; it never will call deleteTexture on it.
+    renderer.getContext().deleteTexture(texture.sourceTexture as WebGLTexture)
+  }
+  texture?.dispose()
   for (const b of entry.bitmaps) b.close()
   entry.texture = null
   entry.bitmaps = []
+}
+
+/**
+ * Uploads artwork through texImage2D into a texture three does not manage.
+ *
+ * three uploads every texture with texStorage2D + texSubImage2D, and on
+ * Chrome's Metal backend that pair cannot take the fast path into an sRGB
+ * texture from an ImageBitmap: the bytes come back to the CPU, get converted,
+ * and go up again — about 30ms for a 3168×1344 plate, measured. The same
+ * bitmap through a mutable texImage2D is a copy, under 4ms. So artwork is
+ * uploaded here, with exactly the internal format, filters and anisotropy
+ * three would have chosen, and handed to three as an ExternalTexture.
+ */
+function uploadExternal(levels: ImageBitmap[], spec: TextureSpec): THREE.ExternalTexture | null {
+  if (!renderer) return null
+  const gl = renderer.getContext()
+  if (!(gl instanceof WebGL2RenderingContext)) return null
+  const glTexture = gl.createTexture()
+  if (!glTexture) return null
+
+  const state = renderer.state
+  const unit = gl.TEXTURE0 + Math.max(0, renderer.capabilities.maxTextures - 1)
+  state.bindTexture(gl.TEXTURE_2D, glTexture, unit)
+  state.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)
+  state.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false)
+  state.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE)
+  state.pixelStorei(gl.UNPACK_ALIGNMENT, 4)
+  for (let i = 0; i < levels.length; i++) {
+    gl.texImage2D(gl.TEXTURE_2D, i, gl.SRGB8_ALPHA8, gl.RGBA, gl.UNSIGNED_BYTE, levels[i])
+  }
+  if (levels.length === 1) gl.generateMipmap(gl.TEXTURE_2D)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+  const anisotropy = spec.anisotropy === 'tier' ? PROFILES[useExperience.getState().quality].anisotropy : (spec.anisotropy ?? 1)
+  if (anisotropy > 1) {
+    const ext = renderer.extensions.get('EXT_texture_filter_anisotropic') as { TEXTURE_MAX_ANISOTROPY_EXT: number } | null
+    if (ext) gl.texParameterf(gl.TEXTURE_2D, ext.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(anisotropy, renderer.capabilities.getMaxAnisotropy()))
+  }
+  state.unbindTexture()
+
+  const texture = new THREE.ExternalTexture(glTexture)
+  // Typed as null on ExternalTexture; consumers read width/height for aspect.
+  ;(texture as unknown as { image: ImageBitmap }).image = levels[0]
+  texture.colorSpace = THREE.SRGBColorSpace
+  texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping
+  texture.anisotropy = anisotropy
+  return texture
 }
 
 /** Starts loading (and uploading) a set of textures. Resolves when all have settled. */
@@ -288,10 +351,23 @@ export function textureCacheSize(): number {
 /**
  * Suspends until every texture is decoded and uploaded. The array identity of
  * `specs` does not matter; entries are keyed by content.
+ *
+ * It suspends by THROWING the promise rather than through React's `use`. `use`
+ * makes React replay the component in place once the promise settles, and a
+ * component that mounts, suspends part-way through its hooks and is then
+ * replayed reaches hooks the first attempt never did — React 19 reports that
+ * as "Update hook called on initial render" and falls back to a synchronous
+ * re-render of the whole root. A thrown promise unwinds to the Suspense
+ * boundary instead, and the retry is a clean mount.
  */
 export function useSceneTextures(specs: readonly TextureSpec[]): THREE.Texture[] {
   const entries = specs.map(request)
-  const textures = entries.map((e) => (e.texture ? e.texture : use(e.promise)))
+  const pending = entries.find((e) => !e.texture)
+  if (pending) {
+    if (pending.error) throw pending.error
+    throw pending.promise
+  }
+  const textures = entries.map((e) => e.texture as THREE.Texture)
   useEffect(() => {
     for (const e of entries) e.users++
     return () => {
