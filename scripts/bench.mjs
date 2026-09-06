@@ -14,7 +14,8 @@
 //
 // The page runs on a VIRTUAL CLOCK: performance.now, requestAnimationFrame and
 // setTimeout are replaced so that one tick is exactly 1/60 s and the clock
-// holds still while an image is loading. Two consequences that matter:
+// holds still while anything is loading (an image, a fetch, a script chunk, a
+// bitmap decode). Two consequences that matter:
 //
 //   1. Every run visits the same virtual frame at every mark, so screenshots
 //      taken at a mark are reproducible and can be pixel-compared between
@@ -46,7 +47,8 @@ const OUT = process.env.BENCH_DIR ?? '.bench'
 const GATE_READ_MS = 2000 // how long a reader spends on the enter gate
 const STEADY_FRAMES = 150 // frames sampled at rest on each mark
 const SETTLE_FRAMES = 150 // frames allowed for the transition into a mark
-const CHAPTERS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+const CHAPTERS = (process.env.BENCH_CHAPTERS ?? '1,2,3,4,5,6,7,8,9,10,11,12,13').split(',').map(Number)
+const DUMP = process.env.BENCH_DUMP === '1' // include every frame record in the JSON
 
 const NETWORKS = {
   none: null,
@@ -59,9 +61,9 @@ const NETWORKS = {
 // the app resolves at call time, so the app itself is unmodified.
 const PROBE = String.raw`(() => {
   const S = (window.__bench = {
-    frames: [], phase: 'boot', paused: false, pendingImages: 0, pendingSince: 0, pendingMs: 0,
+    frames: [], phase: 'boot', paused: false, pending: 0, pendingSince: 0, pendingMs: 0,
     gl: null,
-    texBytes: 0, texAlloc: new WeakMap(), longTasks: [], events: [],
+    texBytes: 0, texAlloc: new WeakMap(), longTasks: [], events: [], px: new Uint8Array(4),
   })
   const realNow = performance.now.bind(performance)
   const realRAF = window.requestAnimationFrame.bind(window)
@@ -94,14 +96,14 @@ const PROBE = String.raw`(() => {
   function tick() {
     scheduled = false
     if (S.paused) { schedule(); return }
-    if (S.pendingImages > 0) {
-      // Hold the clock while a texture is in flight, but never for ever: a
-      // lazy image that never enters the viewport would otherwise stall the run.
-      if (realNow() - S.pendingSince > 10000) { S.events.push({ t: realNow(), what: 'pending-timeout' }); S.pendingImages = 0 }
+    if (S.pending > 0) {
+      // Hold the clock while anything is in flight, but never for ever: a lazy
+      // image that never enters the viewport would otherwise stall the run.
+      if (realNow() - S.pendingSince > 10000) { S.events.push({ t: realNow(), what: 'pending-timeout', phase: S.phase }); S.pending = 0 }
       else { schedule(); return }
     }
     vnow += STEP
-    const rec = { v: vnow, t: realNow(), phase: S.phase, draws: 0, links: 0, shaderMs: 0, uploads: 0, uploadBytes: 0, mips: 0, js: 0, fin: 0, pendingMs: S.pendingMs }
+    const rec = { v: vnow, t: realNow(), phase: S.phase, draws: 0, links: 0, shaderMs: 0, uploads: 0, uploadBytes: 0, uploadMs: 0, mips: 0, js: 0, fin: 0, pendingMs: S.pendingMs }
     S.pendingMs = 0
     S.frames.push(rec)
 
@@ -111,13 +113,20 @@ const PROBE = String.raw`(() => {
     const cbs = [...rafQueue.values()]
     rafQueue.clear()
     const t0 = realNow()
+    S.inTick = true
     for (const cb of cbs) { try { cb(vnow) } catch (e) { console.error(e) } }
+    S.inTick = false
     const t1 = realNow()
     rec.js = t1 - t0
-    // Fence: wait for the GPU to finish this frame so the next tick's timestamp
-    // measures the whole cost of one frame rather than how deep the driver's
-    // queue is. (EXT_disjoint_timer_query is not trustworthy on ANGLE/Metal.)
-    if (S.gl && !S.gl.isContextLost()) { try { S.gl.finish() } catch {} }
+    // Fence: a one-pixel readback of the default framebuffer forces the GPU to
+    // finish this frame before the next tick, so js + fin is the whole cost of
+    // one frame rather than a measure of how deep the driver's queue happens
+    // to be. (gl.finish() does not block here, and EXT_disjoint_timer_query is
+    // not trustworthy on ANGLE/Metal.)
+    if (S.gl && !S.gl.isContextLost()) {
+      try { S.gl.bindFramebuffer(S.gl.FRAMEBUFFER, null); S.gl.readPixels(0, 0, 1, 1, S.gl.RGBA, S.gl.UNSIGNED_BYTE, S.px) } catch {}
+      rec.dbw = S.gl.drawingBufferWidth
+    }
     rec.fin = realNow() - t1
     if (rafQueue.size || timers.size) schedule()
   }
@@ -137,7 +146,8 @@ const PROBE = String.raw`(() => {
   const P = WebGL2RenderingContext.prototype
   const wrap = (name, fn) => { const o = P[name]; P[name] = function (...a) { const r = o.apply(this, a); try { fn.call(this, a, r) } catch {} ; return r } }
   const timed = (name, fn) => { const o = P[name]; P[name] = function (...a) { const t = realNow(); const r = o.apply(this, a); const c = cur(); if (c) { c.shaderMs += realNow() - t; fn && fn(c, a) } return r } }
-  for (const d of ['drawArrays', 'drawElements', 'drawArraysInstanced', 'drawElementsInstanced']) wrap(d, () => { const c = cur(); if (c) c.draws++ })
+  S.stacks = {}
+  for (const d of ['drawArrays', 'drawElements', 'drawArraysInstanced', 'drawElementsInstanced']) wrap(d, () => { const c = cur(); if (c) c.draws++; if (!S.stacks[S.phase]) S.stacks[S.phase] = { inTick: S.inTick, stack: new Error().stack.split('\n').slice(1, 7).join(' | ') } })
   timed('linkProgram', (c) => { c.links++ })
   timed('getProgramParameter')
   timed('getShaderParameter')
@@ -149,33 +159,68 @@ const PROBE = String.raw`(() => {
     if (src && src.width) return src.width * src.height * 4
     return 0
   }
+  const timedUpload = (name, fn) => { const o = P[name]; P[name] = function (...a) { const t = realNow(); const r = o.apply(this, a); const c = cur(); if (c) { c.uploadMs += realNow() - t; try { fn && fn.call(this, a) } catch {} } return r } }
   const alloc = function (a) {
     const c = cur(); const bytes = texSize(a)
     const tex = this.getParameter(this.TEXTURE_BINDING_2D)
     if (tex) { const prev = S.texAlloc.get(tex) ?? 0; S.texAlloc.set(tex, bytes); S.texBytes += bytes - prev }
     if (c) { c.uploads++; c.uploadBytes += bytes }
   }
-  wrap('texStorage2D', alloc)
-  wrap('texImage2D', function (a) { if (a.length !== 6 && a.length < 9) return; alloc.call(this, a) })
-  wrap('texSubImage2D', () => { const c = cur(); if (c) c.uploads++ })
-  wrap('generateMipmap', () => { const c = cur(); if (c) c.mips++ })
+  timedUpload('texStorage2D', alloc)
+  timedUpload('texImage2D', function (a) { if (a.length !== 6 && a.length < 9) return; alloc.call(this, a) })
+  timedUpload('texSubImage2D', () => { const c = cur(); if (c) c.uploads++ })
+  timedUpload('generateMipmap', () => { const c = cur(); if (c) c.mips++ })
   wrap('deleteTexture', function (a) { const b = S.texAlloc.get(a[0]); if (b) { S.texBytes -= b; S.texAlloc.delete(a[0]) } })
 
-  // --- image loads hold the clock ---------------------------------------
+  // --- loads hold the clock ---------------------------------------------
+  // Anything asynchronous that the app waits for freezes virtual time until it
+  // lands, so a scene mounts on the same virtual tick whatever the network
+  // did. pendingMs is the real time spent held, attributed to the next frame.
+  function hold() {
+    if (S.pending === 0) S.pendingSince = realNow()
+    S.pending++
+    const start = realNow()
+    let done = false
+    return () => { if (done) return; done = true; S.pending = Math.max(0, S.pending - 1); S.pendingMs += realNow() - start }
+  }
   const desc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src')
   Object.defineProperty(HTMLImageElement.prototype, 'src', {
     configurable: true, get: desc.get,
     set(v) {
       if (this.loading !== 'lazy') {
-        if (S.pendingImages === 0) S.pendingSince = realNow()
-        S.pendingImages++
-        const start = realNow()
-        const done = () => { S.pendingImages = Math.max(0, S.pendingImages - 1); S.pendingMs += realNow() - start; this.removeEventListener('load', done); this.removeEventListener('error', done) }
+        const release = hold()
+        const done = () => { release(); this.removeEventListener('load', done); this.removeEventListener('error', done) }
         this.addEventListener('load', done); this.addEventListener('error', done)
       }
       desc.set.call(this, v)
     },
   })
+  const realFetch = window.fetch.bind(window)
+  window.fetch = function (...a) {
+    const release = hold()
+    return realFetch(...a).then((res) => {
+      // Held until the body is consumed, which is when the app can act on it.
+      for (const m of ['arrayBuffer', 'blob', 'json', 'text']) {
+        const o = res[m].bind(res)
+        res[m] = () => o().finally(release)
+      }
+      // A body nobody reads must not hold the clock for ever.
+      window.setTimeout(release, 30000)
+      return res
+    }, (e) => { release(); throw e })
+  }
+  if (typeof createImageBitmap === 'function') {
+    const realCIB = window.createImageBitmap.bind(window)
+    window.createImageBitmap = function (...a) { const release = hold(); return realCIB(...a).finally(release) }
+  }
+  new MutationObserver((muts) => {
+    for (const m of muts) for (const n of m.addedNodes) {
+      if (n.tagName === 'SCRIPT' && n.src) {
+        const release = hold()
+        n.addEventListener('load', release); n.addEventListener('error', release)
+      }
+    }
+  }).observe(document.documentElement, { childList: true, subtree: true })
 
   try {
     new PerformanceObserver((l) => { for (const e of l.getEntries()) S.longTasks.push({ t: e.startTime, d: e.duration, phase: S.phase }) }).observe({ entryTypes: ['longtask'] })
@@ -306,6 +351,7 @@ async function measure(name, transitionFrames) {
         shaderMs: trans.reduce((s, f) => s + f.shaderMs, 0),
         uploads: trans.reduce((s, f) => s + f.uploads, 0),
         uploadMB: trans.reduce((s, f) => s + f.uploadBytes, 0) / 1048576,
+        uploadMs: trans.reduce((s, f) => s + f.uploadMs, 0),
         mips: trans.reduce((s, f) => s + f.mips, 0),
         pendingMs: trans.reduce((s, f) => s + f.pendingMs, 0),
         gapMs,
@@ -320,7 +366,7 @@ async function measure(name, transitionFrames) {
   r.fin = stats(r.fin)
   phases.push(r)
   const tr = r.transition
-  process.stdout.write(`  ${name.padEnd(6)} frame ${fmt(r.frame.med)}/${fmt(r.frame.p95)}ms (js ${fmt(r.js.med)} fence ${fmt(r.fin.med)})  draws ${r.steadyDraws}  | swap: maxJs ${fmt(tr.maxJs)}ms links ${tr.links} (${fmt(tr.shaderMs)}ms) uploads ${tr.uploads} (${tr.uploadMB.toFixed(1)}MB) gap ${fmt(tr.gapMs)}ms  | tex ${r.texMB.toFixed(0)}MB\n`)
+  process.stdout.write(`  ${name.padEnd(6)} frame ${fmt(r.frame.med)}/${fmt(r.frame.p95)}ms (js ${fmt(r.js.med)} fence ${fmt(r.fin.med)})  draws ${r.steadyDraws}  | swap: maxJs ${fmt(tr.maxJs)}ms links ${tr.links} (${fmt(tr.shaderMs)}ms) uploads ${tr.uploads} (${tr.uploadMB.toFixed(1)}MB, ${fmt(tr.uploadMs)}ms) gap ${fmt(tr.gapMs)}ms  | tex ${r.texMB.toFixed(0)}MB\n`)
   return r
 }
 function fmt(x) { return x == null ? '–' : x.toFixed(1) }
@@ -363,8 +409,10 @@ const resources = await bench(() => {
 const memory = await bench(() => ({ heapMB: performance.memory ? performance.memory.usedJSHeapSize / 1048576 : null, texMB: window.__bench.texBytes / 1048576 }))
 const renderer = await bench(() => window.__bench.renderer)
 const events = await bench(() => window.__bench.events)
+const stacks = await bench(() => window.__bench.stacks)
+const frames = DUMP ? await bench(() => window.__bench.frames) : undefined
 
-const result = { label, date: new Date().toISOString(), meta: { dpr: DPR, net: NET, renderer, viewport: '1600x900', gateReadMs: GATE_READ_MS, steadyFrames: STEADY_FRAMES }, nav, gate: { canvasBeforeEnter: gateEnd.gl, texMBBeforeEnter: gateEnd.texBytes / 1048576 }, enter, phases, resources, memory, events, wallMs: Date.now() - t0 }
+const result = { label, date: new Date().toISOString(), meta: { dpr: DPR, net: NET, renderer, viewport: '1600x900', gateReadMs: GATE_READ_MS, steadyFrames: STEADY_FRAMES }, nav, gate: { canvasBeforeEnter: gateEnd.gl, texMBBeforeEnter: gateEnd.texBytes / 1048576 }, enter, phases, resources, memory, events, stacks, frames, wallMs: Date.now() - t0 }
 await writeFile(join(OUT, `${label}.json`), JSON.stringify(result, null, 2))
 process.stdout.write(`  resources: ${Object.entries(resources).map(([k, v]) => `${k} ${v.count}× ${(v.transferKB / 1024).toFixed(1)}MB`).join(', ')}\n`)
 process.stdout.write(`  wrote ${join(OUT, `${label}.json`)} (${((Date.now() - t0) / 1000).toFixed(0)}s)\n`)
