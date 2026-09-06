@@ -1,12 +1,12 @@
 'use client'
 
-import { useTexture } from '@react-three/drei'
 import { useFrame, useThree } from '@react-three/fiber'
 import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { FLOW_RENDER_FRAG, FLOW_SIM_FRAG, FULLSCREEN_VERT } from '@/shaders/inkFlow'
 import { useExperience } from '@/store/experience'
-import { PROFILES } from './quality'
+import { useSceneTextures } from './textures'
+import { CH06, sim as simTexture } from './assets'
 
 /**
  * Ping-pong GPGPU ink flow.
@@ -78,22 +78,8 @@ export function InkFlow({
   const tier = useExperience((s) => s.quality)
   const reduced = useExperience((s) => s.reducedMotion)
 
-  const [heightTex, sizingTex, paperTex] = useTexture([
-    height,
-    sizing,
-    '/assets/generated/img/ink/paper-fibre-01.webp',
-  ])
-
-  useMemo(() => {
-    for (const t of [heightTex, sizingTex, paperTex]) {
-      if (!t) continue
-      t.colorSpace = THREE.NoColorSpace
-      t.wrapS = t.wrapT = THREE.RepeatWrapping
-      t.minFilter = THREE.LinearFilter
-      t.magFilter = THREE.LinearFilter
-      t.generateMipmaps = false
-    }
-  }, [heightTex, sizingTex, paperTex])
+  const specs = useMemo(() => [simTexture(height), simTexture(sizing), CH06.paper], [height, sizing])
+  const [heightTex, sizingTex, paperTex] = useSceneTextures(specs)
 
   const res = GRID[tier]
 
@@ -274,16 +260,12 @@ export function InkFlow({
     }
   })
 
-  const anisotropy = PROFILES[tier].anisotropy
-  useMemo(() => {
-    if (paperTex) paperTex.anisotropy = anisotropy
-  }, [paperTex, anisotropy])
-
   return (
     <mesh position={position} rotation={rotation}>
       <planeGeometry args={[size[0], size[1], 1, 1]} />
       <shaderMaterial
         ref={displayRef}
+        dispose={null}
         vertexShader={/* glsl */ `
           varying vec2 vUv;
           void main() {

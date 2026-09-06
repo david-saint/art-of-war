@@ -65,6 +65,7 @@ uniform float uOpacity;
 
 uniform vec2  uMapScale;         // artwork size in plane units (1,1 = fill frame)
 uniform vec2  uMapOffset;        // artwork centre, in aspect-corrected plane space
+uniform vec4  uRect;             // the part of the frame this plane covers: x, y, w, h in frame space
 
 uniform vec2  uPointer;          // -1..1 in aspect-corrected plane space
 uniform float uPointerRadius;
@@ -73,8 +74,13 @@ uniform float uPointerInfluence;  // how far ahead the brush pulls the front
 ${NOISE_CHUNK}
 
 void main() {
-  vec2 uv = vUv;
-  vec2 p = vec2((uv.x - 0.5) * uAspect, uv.y - 0.5);
+  // Frame space: y runs -0.5..0.5 over the height of the frame and x is
+  // aspect-corrected. The plane may cover only a patch of the frame — the
+  // artwork's bounds, see InkPlane — so p is reconstructed from that patch
+  // rather than read off the plane's own uv. Every field below is a function
+  // of p, which is what makes the patch render identically to the full sheet.
+  vec2 p = uRect.xy + vUv * uRect.zw;
+  vec2 uv = vec2(p.x / uAspect + 0.5, p.y + 0.5);
 
   // Divergence-free advection. Small amplitude: this displaces where we SAMPLE
   // the threshold field, it does not move the artwork.

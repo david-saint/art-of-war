@@ -2,11 +2,12 @@
 
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { EffectComposer, Bloom, DepthOfField, Noise, Vignette } from '@react-three/postprocessing'
-import { Preload } from '@react-three/drei'
-import { useEffect, useMemo, useRef, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import * as THREE from 'three'
 import { useExperience } from '@/store/experience'
 import { FrameWatchdog, PROFILES } from './quality'
+import { prewarmTextures, setTextureRenderer } from './textures'
+import { sceneAssets } from './assets'
 
 /**
  * One canvas, one WebGLRenderer, for the entire site.
@@ -49,15 +50,62 @@ function QualityGovernor() {
   return null
 }
 
-/** Suspends the render loop while the tab is hidden. Saves battery, and stops
- *  a backgrounded tab from accumulating a huge first delta on return. */
-function VisibilityGate() {
+/** Frames the canvas is allowed to draw behind the gate once the hero is resident. */
+const WARM_FRAMES = 12
+
+/**
+ * Decides whether the render loop runs at all. It stops for three reasons,
+ * none of which a reader can see:
+ *
+ *   - the tab is hidden. Saves battery, and stops a backgrounded tab from
+ *     accumulating a huge first delta on return;
+ *   - Codex Mode. The design says the camera stops, and the canvas sits behind
+ *     a 22px blur and a scrim — every frame drawn there is drawn for nobody,
+ *     and each one makes the compositor redo the blur;
+ *   - the enter gate, once the hero has been drawn. The canvas is mounted
+ *     behind the gate on purpose, so that the render layer's code, the hero's
+ *     textures and every shader are ready while the reader is still reading
+ *     the threshold, and Enter reveals a running scene rather than starting
+ *     one. But an opaque sheet does not need sixty frames a second behind it:
+ *     after the hero has drawn a dozen frames the loop waits for the click.
+ */
+function FrameloopDirector() {
   const setFrameloop = useThree((s) => s.setFrameloop)
+  const mode = useExperience((s) => s.mode)
+  const entered = useExperience((s) => s.entered)
+  const entering = useExperience((s) => s.entering)
+  const [hidden, setHidden] = useState(false)
+  const [warm, setWarm] = useState(false)
+  const heroReady = useRef(false)
+  const warmFrames = useRef(0)
+
   useEffect(() => {
-    const onVisibility = () => setFrameloop(document.hidden ? 'never' : 'always')
+    const onVisibility = () => setHidden(document.hidden)
+    onVisibility()
     document.addEventListener('visibilitychange', onVisibility)
     return () => document.removeEventListener('visibilitychange', onVisibility)
-  }, [setFrameloop])
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    void prewarmTextures(sceneAssets(-1)).then(() => {
+      if (!cancelled) heroReady.current = true
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useFrame(() => {
+    if (warm || !heroReady.current) return
+    if (++warmFrames.current >= WARM_FRAMES) setWarm(true)
+  })
+
+  useEffect(() => {
+    const behindGate = !entered && !entering && warm
+    setFrameloop(hidden || mode === 'codex' || behindGate ? 'never' : 'always')
+  }, [setFrameloop, hidden, mode, entered, entering, warm])
+
   return null
 }
 
@@ -70,8 +118,14 @@ function Post() {
   // before anything additive, or bloom bleeds across the focal plane and the
   // whole frame goes soft. Grain and vignette come last so they sit on the
   // finished image the way they would on a print.
+  //
+  // No multisampling. MSAA resolves the edges of GEOMETRY, and nothing in this
+  // project has a geometric edge in frame: every plate covers the frame, the
+  // ink and the particles are textured quads and points whose visible edges
+  // are alpha, and alpha is per-pixel coverage that MSAA does not touch. At
+  // 4× on a Retina frame it was a fifth of the render for no pixels changed.
   return (
-    <EffectComposer enableNormalPass={false} multisampling={tier === 'high' ? 4 : 0}>
+    <EffectComposer enableNormalPass={false} multisampling={0}>
       <>
         {p.depthOfField && !reduced ? (
           <DepthOfField focusDistance={0.012} focalLength={0.05} bokehScale={3.2} height={480} />
@@ -117,7 +171,10 @@ export function Stage({ children }: StageProps) {
       <Canvas
         dpr={profile.dpr}
         gl={{
-          antialias: tier === 'high',
+          // The scene is composited through the effect composer, so the
+          // default framebuffer is only ever written by a full-frame quad;
+          // see the note on multisampling in Post.
+          antialias: false,
           alpha: false,
           powerPreference: 'high-performance',
           stencil: false,
@@ -135,13 +192,14 @@ export function Stage({ children }: StageProps) {
           // Scenes set their own ground. Paper for most of the treatise; ink for
           // the night chapters. This is only the fallback for the first frame.
           scene.background = new THREE.Color('#E8E2D4')
+          // Lets textures upload the moment they decode instead of on first draw.
+          setTextureRenderer(gl)
         }}
       >
         <QualityGovernor />
-        <VisibilityGate />
+        <FrameloopDirector />
         {children}
         <Post />
-        <Preload all />
       </Canvas>
     </div>
   )

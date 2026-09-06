@@ -8,7 +8,9 @@
  *    there is always a few-millisecond seam at the wrap, and on a three-minute
  *    ambient bed a reader hears that seam every three minutes for forty
  *    minutes. The cost is holding the decoded buffer in memory, which is why
- *    only two beds are ever resident.
+ *    only a handful of stems are ever resident: a three-minute stereo bed
+ *    decodes to sixty megabytes of PCM, and thirteen chapters' worth of them
+ *    left in memory is what makes a phone reload the tab at chapter nine.
  *
  * 2. Transition hits are SYNTHESISED, not sampled. A sub-bass impact is a sine
  *    sweep and an envelope; shipping it as a file would cost 40KB to say
@@ -30,19 +32,26 @@ type Layer = {
 
 const FADE = { bed: 3.2, texture: 2.4, narration: 0.35 }
 
+/** Decoded stems kept in memory beyond the ones currently playing. */
+const MAX_RESIDENT = 4
+
 export class AudioEngine {
   private ctx: AudioContext | null = null
   private master: GainNode | null = null
   private duck: GainNode | null = null
+  /** Insertion order is recency: a stem is re-inserted whenever it is used. */
   private buffers = new Map<StemId, AudioBuffer>()
   private pending = new Map<StemId, Promise<AudioBuffer | null>>()
+  /** Encoded bytes fetched ahead of a context existing, consumed by `load`. */
+  private bytes = new Map<StemId, Promise<ArrayBuffer | null>>()
   private layers: Record<'bed' | 'texture', Layer> = {
     bed: { gain: null as unknown as GainNode, source: null, id: null },
     texture: { gain: null as unknown as GainNode, source: null, id: null },
   }
   private narrationGain: GainNode | null = null
   private currentNarration: AudioBufferSourceNode | null = null
-  private ext: '.ogg' | '.m4a' = '.ogg'
+  private narrationId: StemId | null = null
+  private format: '.ogg' | '.m4a' | null = null
 
   get unlocked(): boolean {
     return this.ctx !== null && this.ctx.state === 'running'
@@ -53,7 +62,6 @@ export class AudioEngine {
     if (!this.ctx) {
       const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
       this.ctx = new Ctor()
-      this.ext = this.pickFormat()
 
       this.master = this.ctx.createGain()
       this.master.gain.value = 0.7
@@ -79,11 +87,48 @@ export class AudioEngine {
     if (this.ctx.state === 'suspended') await this.ctx.resume()
   }
 
-  private pickFormat(): '.ogg' | '.m4a' {
-    const probe = document.createElement('audio')
-    // Safari reports "maybe" for opus-in-ogg in some versions but cannot decode
-    // it, so require a definite yes before choosing it.
-    return probe.canPlayType('audio/ogg; codecs=opus') === 'probably' ? '.ogg' : '.m4a'
+  private get ext(): '.ogg' | '.m4a' {
+    if (!this.format) {
+      const probe = document.createElement('audio')
+      // Safari reports "maybe" for opus-in-ogg in some versions but cannot decode
+      // it, so require a definite yes before choosing it.
+      this.format = probe.canPlayType('audio/ogg; codecs=opus') === 'probably' ? '.ogg' : '.m4a'
+    }
+    return this.format
+  }
+
+  private fetchBytes(id: StemId): Promise<ArrayBuffer | null> {
+    return fetch(`/assets/generated/audio/${id}${this.ext}`)
+      .then((res) => (res.ok ? res.arrayBuffer() : null))
+      .catch(() => null)
+  }
+
+  /**
+   * Fetches a stem's bytes without needing a context, so the download can start
+   * before the gesture that unlocks audio. Decoding still waits for the gesture.
+   */
+  prefetch(ids: StemId[]): void {
+    for (const id of ids) {
+      if (this.buffers.has(id) || this.pending.has(id) || this.bytes.has(id)) continue
+      this.bytes.set(id, this.fetchBytes(id))
+    }
+  }
+
+  /** Marks a stem as recently used, so it survives the next trim. */
+  private touch(id: StemId): void {
+    const buffer = this.buffers.get(id)
+    if (!buffer) return
+    this.buffers.delete(id)
+    this.buffers.set(id, buffer)
+  }
+
+  /** Releases decoded stems that are neither playing nor recently used. */
+  private trim(): void {
+    const inUse = new Set<StemId | null>([this.layers.bed.id, this.layers.texture.id, this.narrationId])
+    for (const id of this.buffers.keys()) {
+      if (this.buffers.size <= MAX_RESIDENT) return
+      if (!inUse.has(id)) this.buffers.delete(id)
+    }
   }
 
   setVolume(v: number): void {
@@ -94,17 +139,21 @@ export class AudioEngine {
   async load(id: StemId): Promise<AudioBuffer | null> {
     if (!this.ctx) return null
     const cached = this.buffers.get(id)
-    if (cached) return cached
+    if (cached) {
+      this.touch(id)
+      return cached
+    }
     const inFlight = this.pending.get(id)
     if (inFlight) return inFlight
 
     const task = (async () => {
       try {
-        const res = await fetch(`/assets/generated/audio/${id}${this.ext}`)
-        if (!res.ok) throw new Error(`${res.status}`)
-        const bytes = await res.arrayBuffer()
+        const bytes = await (this.bytes.get(id) ?? this.fetchBytes(id))
+        this.bytes.delete(id)
+        if (!bytes) throw new Error('unavailable')
         const buffer = await this.ctx!.decodeAudioData(bytes)
         this.buffers.set(id, buffer)
+        this.trim()
         return buffer
       } catch {
         // A missing or undecodable stem must never take the page down. The
@@ -171,6 +220,7 @@ export class AudioEngine {
     const now = this.ctx.currentTime
     src.start(now)
     this.currentNarration = src
+    this.narrationId = id
 
     const d = this.duck.gain
     d.cancelScheduledValues(now)
@@ -180,7 +230,10 @@ export class AudioEngine {
     d.linearRampToValueAtTime(1, now + buffer.duration + 0.8)
 
     src.onended = () => {
-      if (this.currentNarration === src) this.currentNarration = null
+      if (this.currentNarration === src) {
+        this.currentNarration = null
+        this.narrationId = null
+      }
     }
   }
 
@@ -275,6 +328,7 @@ export class AudioEngine {
     void this.ctx?.close()
     this.ctx = null
     this.buffers.clear()
+    this.bytes.clear()
   }
 }
 

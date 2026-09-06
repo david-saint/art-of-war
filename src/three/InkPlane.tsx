@@ -1,6 +1,5 @@
 'use client'
 
-import { useTexture } from '@react-three/drei'
 import { useFrame, useThree } from '@react-three/fiber'
 import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
@@ -11,6 +10,8 @@ import {
 } from '@/shaders/inkDissolve'
 import { useExperience } from '@/store/experience'
 import { damp } from '@/lib/scroll'
+import { useSceneTextures, type TextureSpec } from './textures'
+import { glyph } from './assets'
 
 export type InkPlaneProps = {
   /** Artwork whose alpha channel is ink coverage. Omit for a pure ink field. */
@@ -52,6 +53,14 @@ const hexToRgb = (hex: string): [number, number, number] => {
   return [c.r, c.g, c.b]
 }
 
+/**
+ * How far past the artwork's edge the fitted quad extends, as a fraction of the
+ * artwork's size. The shader displaces its artwork lookup by the curl field
+ * (at most ~3% of the map at the highest turbulence in use); the margin is
+ * more than twice that, so no ink is ever clipped by the quad's edge.
+ */
+const FIT_MARGIN = 0.08
+
 export function InkPlane({
   map,
   fibre = '/assets/generated/img/ink/paper-fibre-01.webp',
@@ -81,20 +90,11 @@ export function InkPlane({
   const pointer = useRef(new THREE.Vector2(-99, -99))
   const pointerTarget = useRef(new THREE.Vector2(-99, -99))
 
-  const urls = useMemo(() => (map ? [fibre, map] : [fibre]), [fibre, map])
-  const textures = useTexture(urls)
-  const [fibreTex, mapTex] = Array.isArray(textures) ? textures : [textures, undefined]
-
-  useMemo(() => {
-    if (fibreTex) {
-      fibreTex.wrapS = fibreTex.wrapT = THREE.RepeatWrapping
-      fibreTex.colorSpace = THREE.NoColorSpace // data, not colour
-    }
-    if (mapTex) {
-      mapTex.colorSpace = THREE.SRGBColorSpace
-      mapTex.wrapS = mapTex.wrapT = THREE.ClampToEdgeWrapping
-    }
-  }, [fibreTex, mapTex])
+  const specs = useMemo<TextureSpec[]>(() => {
+    const fibreSpec: TextureSpec = { url: fibre, kind: 'data-repeat' }
+    return map ? [fibreSpec, glyph(map)] : [fibreSpec]
+  }, [fibre, map])
+  const [fibreTex, mapTex] = useSceneTextures(specs)
 
   const uniforms = useMemo(() => {
     const d = INK_DISSOLVE_DEFAULTS
@@ -107,6 +107,7 @@ export function InkPlane({
       uTime: { value: 0 },
       uSeed: { value: seed },
       uAspect: { value: 1 },
+      uRect: { value: new THREE.Vector4(-0.5, -0.5, 1, 1) },
       // THREE.Color converts an sRGB hex into the renderer's linear working
       // space, which is what the shader must receive.
       uInk: { value: new THREE.Color(ink ?? d.uInk) },
@@ -174,6 +175,15 @@ export function InkPlane({
     }
   }, [pointerBrush])
 
+  // With artwork, the only pixels that can carry ink are the artwork's own —
+  // coverage is its alpha, and alpha is zero everywhere else. So the quad is
+  // fitted to the artwork's bounds instead of the whole frame, and the shader
+  // is told which patch of the frame it is drawing so its fields line up
+  // exactly with what a full-frame plane would have produced there. The
+  // dissolve is by a wide margin the most expensive fragment program in the
+  // project; this removes it from the ~90% of the frame it could never mark.
+  const fitted = fullscreen && Boolean(map) && !opaque
+
   useFrame((state, dt) => {
     const m = materialRef.current
     if (!m) return
@@ -199,26 +209,56 @@ export function InkPlane({
     // Reduced motion still shows ink — it just does not see it move.
     if (!reduced) m.uniforms.uTime.value += dt
 
+    const rect = m.uniforms.uRect.value as THREE.Vector4
     if (fullscreen && meshRef.current) {
       const fovRad = camera.fov * THREE.MathUtils.DEG2RAD
       const h = 2 * Math.tan(fovRad / 2) * distance
-      const w = h * (size.width / Math.max(size.height, 1))
-      meshRef.current.scale.set(w, h, 1)
-      meshRef.current.position.set(0, 0, -distance)
-      meshRef.current.quaternion.identity()
-      camera.localToWorld(meshRef.current.position)
-      meshRef.current.quaternion.copy(camera.quaternion)
-      m.uniforms.uAspect.value = w / h
+      const aspect = size.width / Math.max(size.height, 1)
+
+      // The patch of frame space this quad covers; the whole frame by default.
+      let rx = -aspect / 2
+      let ry = -0.5
+      let rw = aspect
+      let rh = 1
+      if (fitted) {
+        const [sx, sy] = mapScale ?? INK_DISSOLVE_DEFAULTS.uMapScale
+        const [mx, my] = mapOffset ?? INK_DISSOLVE_DEFAULTS.uMapOffset
+        const x0 = Math.max(-aspect / 2, mx - sx * (0.5 + FIT_MARGIN))
+        const x1 = Math.min(aspect / 2, mx + sx * (0.5 + FIT_MARGIN))
+        const y0 = Math.max(-0.5, my - sy * (0.5 + FIT_MARGIN))
+        const y1 = Math.min(0.5, my + sy * (0.5 + FIT_MARGIN))
+        rx = x0
+        ry = y0
+        rw = Math.max(x1 - x0, 1e-4)
+        rh = Math.max(y1 - y0, 1e-4)
+      }
+
+      // One unit of frame space is the frustum's height at `distance`.
+      const mesh = meshRef.current
+      mesh.scale.set(rw * h, rh * h, 1)
+      mesh.position.set((rx + rw / 2) * h, (ry + rh / 2) * h, -distance)
+      mesh.quaternion.identity()
+      camera.localToWorld(mesh.position)
+      mesh.quaternion.copy(camera.quaternion)
+      m.uniforms.uAspect.value = aspect
+      rect.set(rx, ry, rw, rh)
     } else {
-      m.uniforms.uAspect.value = width / height
+      const aspect = width / height
+      m.uniforms.uAspect.value = aspect
+      rect.set(-aspect / 2, -0.5, aspect, 1)
     }
   })
 
   return (
     <mesh ref={meshRef} renderOrder={renderOrder} frustumCulled={!fullscreen}>
       <planeGeometry args={fullscreen ? [1, 1] : [width, height]} />
+      {/* dispose={null}: the material is a few hundred bytes, but disposing it
+          releases the compiled program, and three deletes a program the moment
+          its last material goes. Every chapter swap would then recompile the
+          dissolve from source. Kept alive, the program is compiled once. */}
       <shaderMaterial
         ref={materialRef}
+        dispose={null}
         vertexShader={INK_DISSOLVE_VERT}
         fragmentShader={INK_DISSOLVE_FRAG}
         uniforms={uniforms}

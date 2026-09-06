@@ -134,6 +134,7 @@ export function MistMotes({
     <points geometry={geometry} frustumCulled={false} renderOrder={-50}>
       <shaderMaterial
         ref={material}
+        dispose={null}
         vertexShader={VERT}
         fragmentShader={FRAG}
         uniforms={uniforms}

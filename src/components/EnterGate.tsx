@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useExperience } from '@/store/experience'
+import { getAudioEngine } from '@/lib/audio'
 
 /**
  * The threshold.
@@ -19,6 +20,7 @@ import { useExperience } from '@/store/experience'
 export function EnterGate({ noWebGL = false }: { noWebGL?: boolean }) {
   const entered = useExperience((s) => s.entered)
   const enter = useExperience((s) => s.enter)
+  const beginEnter = useExperience((s) => s.beginEnter)
   const setAudioEnabled = useExperience((s) => s.setAudioEnabled)
   const [closing, setClosing] = useState(false)
 
@@ -34,9 +36,16 @@ export function EnterGate({ noWebGL = false }: { noWebGL?: boolean }) {
 
   const go = (withAudio: boolean) => {
     setAudioEnabled(withAudio)
+    beginEnter()
     setClosing(true)
     window.setTimeout(() => enter(), 520)
   }
+
+  // A hand moving toward "Enter with sound" is a few hundred milliseconds of
+  // warning. That is enough to have the overture's bytes on hand when the
+  // click arrives, so the first bar plays as the gate lifts instead of after
+  // a two-megabyte download. Readers who choose silence never fetch it.
+  const warmAudio = () => getAudioEngine().prefetch(['bed/overture'])
 
   return (
     <div
@@ -64,6 +73,8 @@ export function EnterGate({ noWebGL = false }: { noWebGL?: boolean }) {
           <button
             type="button"
             onClick={() => go(true)}
+            onPointerEnter={warmAudio}
+            onFocus={warmAudio}
             className="group relative w-full border border-gold-700/60 px-9 py-4 font-mono text-caption uppercase tracking-[0.3em] text-gold-300 transition-colors duration-200 hover:bg-gold-700/12 sm:w-auto"
           >
             Enter with sound

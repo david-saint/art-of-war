@@ -2,20 +2,20 @@
 
 import { useThree } from '@react-three/fiber'
 import { Suspense, useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
-import * as THREE from 'three'
 import { useDiscreteScroll } from '@/lib/useScroll'
 import { useExperience } from '@/store/experience'
 import { AssetBoundary } from './AssetBoundary'
 import { CameraRig } from './CameraRig'
 import type { CameraTrack } from './cameraTrack'
+import { evictTextures, prewarmTextures, textureKey, type TextureSpec } from './textures'
 
 export type SceneDefinition = {
   chapter: number
   title: string
   track: CameraTrack
   Component: ComponentType
-  /** Texture URLs to warm before this chapter becomes active. */
-  preload?: string[]
+  /** Every texture the scene draws. Warmed one chapter early, evicted two chapters late. */
+  assets?: readonly TextureSpec[]
 }
 
 /**
@@ -28,6 +28,13 @@ export type SceneDefinition = {
  * the full-frame ink transition: the DOM ritual goes opaque, the old scene
  * unmounts, the new one mounts, the ritual clears. The reader sees a designed
  * transition, and only one chapter is ever resident.
+ *
+ * What IS allowed to be resident early is the next chapter's textures. They
+ * are decoded and uploaded while the reader is still in this chapter, so the
+ * swap frame has nothing to load, nothing to upload and nothing to compile —
+ * the new scene mounts in the same frame the old one leaves. The chapter
+ * before last is evicted at the same moment, which is what keeps GPU memory
+ * flat across thirteen chapters instead of climbing to half a gigabyte.
  */
 
 type Phase = 'idle' | 'covering' | 'swapping'
@@ -83,24 +90,18 @@ export function SceneController({ scenes, onCoverChange, coverMs = 900 }: SceneC
     return clear
   }, [chapterIndex, active, coverMs, onCoverChange, reduced])
 
-  // Warm the next chapter's textures while the reader is still in this one.
+  // Texture residency: the neighbours of the active scene stay warm — the
+  // next so the swap into it is free, the previous so scrolling back is too —
+  // and everything else is released.
   useEffect(() => {
-    const next = byChapter.get(active + 1)
-    if (!next?.preload?.length) return
-    const loader = new THREE.TextureLoader()
-    const loaded: THREE.Texture[] = []
-    let cancelled = false
-    next.preload.forEach((url) => {
-      loader.load(url, (tex) => {
-        if (cancelled) { tex.dispose(); return }
-        loaded.push(tex)
-      })
-    })
-    return () => {
-      cancelled = true
-      loaded.forEach((t) => t.dispose())
-    }
-  }, [active, byChapter])
+    const i = scenes.findIndex((s) => s.chapter === active)
+    const neighbours = i < 0 ? [] : [scenes[i - 1], scenes[i], scenes[i + 1]]
+    const keep = new Set<string>()
+    for (const s of neighbours) for (const spec of s?.assets ?? []) keep.add(textureKey(spec))
+    evictTextures(keep)
+    const next = i < 0 ? undefined : scenes[i + 1]
+    if (next?.assets?.length) void prewarmTextures(next.assets)
+  }, [active, scenes])
 
   const scene = byChapter.get(active)
   if (!scene) return null
@@ -108,7 +109,7 @@ export function SceneController({ scenes, onCoverChange, coverMs = 900 }: SceneC
   return (
     <group key={scene.chapter}>
       <CameraRig track={scene.track} />
-      <AssetBoundary urls={scene.preload}>
+      <AssetBoundary specs={scene.assets}>
         <Suspense fallback={null}>
           <SceneBoundary>
             <scene.Component />
@@ -163,8 +164,7 @@ function SceneBoundary({ children }: { children: React.ReactNode }) {
         }
       }
       bucket.clear()
-      // Drops shader programs whose materials are gone. Without this the
-      // program cache grows monotonically across thirteen chapters.
+      // Drops render lists that referenced the departed scene's objects.
       gl.renderLists.dispose()
     }
   }, [bucket, gl])

@@ -16,6 +16,9 @@ export type ExperienceState = {
   /** The reader has passed the enter gate and granted the first audio gesture. */
   entered: boolean
   enter: () => void
+  /** The gate has been clicked and is fading; the scene should already be moving. */
+  entering: boolean
+  beginEnter: () => void
 
   audioEnabled: boolean
   masterVolume: number
@@ -56,7 +59,9 @@ export const useExperience = create<ExperienceState>()(
       toggleMode: () => set({ mode: get().mode === 'story' ? 'codex' : 'story' }),
 
       entered: false,
-      enter: () => set({ entered: true }),
+      enter: () => set({ entered: true, entering: false }),
+      entering: false,
+      beginEnter: () => set({ entering: true }),
 
       audioEnabled: false,
       masterVolume: 0.7,

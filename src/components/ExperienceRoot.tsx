@@ -2,6 +2,7 @@
 
 import dynamic from 'next/dynamic'
 import { useEffect, useMemo, useState } from 'react'
+import { preload } from 'react-dom'
 import { Letterbox } from './Letterbox'
 import { WarCouncilHUD } from './WarCouncilHUD'
 import { EnterGate } from './EnterGate'
@@ -13,6 +14,7 @@ import { useExperience } from '@/store/experience'
 import { hasWebGL, probeQuality } from '@/three/quality'
 import { CHAPTER_IDENTITY } from '@/data/chapters'
 import { chapterTrack, heroTrack, mapDescentTrack } from '@/three/tracks'
+import { HERO_URLS, sceneAssets } from '@/three/assets'
 
 /**
  * The 3D layer is loaded client-side only and after first paint.
@@ -24,6 +26,13 @@ import { chapterTrack, heroTrack, mapDescentTrack } from '@/three/tracks'
  * reader should be looking at while a 3D scene warms up. Shipping the canvas in
  * the initial bundle would delay that frame to make an empty canvas appear
  * sooner, which is the wrong trade.
+ *
+ * "After first paint" is not "after Enter", though. The gate is opaque, and
+ * the seconds a reader spends on it are exactly the seconds the render layer
+ * needs: the canvas mounts behind the gate as soon as the page is interactive,
+ * so its code, the hero's plates and every shader are resident before the
+ * click, and the hero's plates are requested before even the render layer's
+ * code has arrived. Enter lifts a sheet off a scene that is already running.
  */
 const Stage = dynamic(() => import('@/three/Stage').then((m) => m.Stage), { ssr: false })
 const SceneController = dynamic(
@@ -41,9 +50,12 @@ const BESPOKE: Record<number, React.ComponentType> = { 6: Chapter06Scene, 12: Ch
 export function ExperienceRoot() {
   useScrollEngine()
   const [webgl, setWebgl] = useState<boolean | null>(null)
+
+  // Emitted as <link rel="preload"> in the server HTML, at low priority so the
+  // gate's own type and fonts are never behind a plate.
+  for (const url of HERO_URLS) preload(url, { as: 'fetch', fetchPriority: 'low' })
   const setQuality = useExperience((s) => s.setQuality)
   const setReducedMotion = useExperience((s) => s.setReducedMotion)
-  const entered = useExperience((s) => s.entered)
 
   useEffect(() => {
     setWebgl(hasWebGL())
@@ -57,12 +69,13 @@ export function ExperienceRoot() {
 
   const scenes = useMemo(
     () => [
-      { chapter: -1, title: 'Hero', track: heroTrack, Component: HeroScene },
+      { chapter: -1, title: 'Hero', track: heroTrack, Component: HeroScene, assets: sceneAssets(-1) },
       ...CHAPTER_IDENTITY.map((c) => ({
         chapter: c.n,
         title: c.titleEn,
         track: c.n === 6 ? mapDescentTrack : chapterTrack(c.n),
         Component: BESPOKE[c.n] ?? (() => <ChapterScene chapter={c.n} seed={c.n * 3.7} />),
+        assets: sceneAssets(c.n),
       })),
     ],
     [],
@@ -70,7 +83,7 @@ export function ExperienceRoot() {
 
   return (
     <>
-      {webgl && entered ? (
+      {webgl ? (
         <Stage>
           <SceneController scenes={scenes} />
         </Stage>

@@ -1,11 +1,12 @@
 'use client'
 
-import { useTexture } from '@react-three/drei'
 import { useFrame, useThree } from '@react-three/fiber'
 import { useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { damp, scroll } from '@/lib/scroll'
 import { useExperience } from '@/store/experience'
+import { useSceneTextures } from './textures'
+import { plate } from './assets'
 
 /**
  * A painted depth layer.
@@ -57,12 +58,8 @@ export function ParallaxPlate({
   const offset = useRef({ x: 0, y: 0 })
   const pointer = useRef({ x: 0, y: 0 })
 
-  const texture = useTexture(url)
-  useMemo(() => {
-    texture.colorSpace = THREE.SRGBColorSpace
-    texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping
-    texture.anisotropy = 4
-  }, [texture])
+  const specs = useMemo(() => [plate(url)], [url])
+  const [texture] = useSceneTextures(specs)
 
   const color = useMemo(() => (tint ? new THREE.Color(tint) : new THREE.Color('#ffffff')), [tint])
 
@@ -102,6 +99,7 @@ export function ParallaxPlate({
     <mesh ref={mesh} renderOrder={-Math.round(depth * 10)}>
       <planeGeometry args={[1, 1]} />
       <meshBasicMaterial
+        dispose={null}
         map={texture}
         transparent={transparent}
         opacity={opacity}

@@ -173,8 +173,12 @@ function frame(now: number) {
   const dt = lastTime ? Math.min((now - lastTime) / 1000, 1 / 15) : 1 / 60
   lastTime = now
 
+  // scrollY is the one layout read this loop makes. Document and viewport
+  // height come from measure(), which the resize signals drive: reading
+  // scrollHeight here would make the browser flush any pending layout on
+  // every frame, and this loop runs on every frame for forty minutes.
   const y = window.scrollY
-  const max = Math.max(1, document.documentElement.scrollHeight - window.innerHeight)
+  const max = Math.max(1, scroll.documentHeight - scroll.viewportHeight)
   const progress = Math.min(1, Math.max(0, y / max))
 
   scroll.raw = y
@@ -191,7 +195,7 @@ function frame(now: number) {
   scroll.smooth = damp(scroll.smooth, progress, SMOOTH_LAMBDA, dt)
 
   // Which chapter section contains the viewport centre line?
-  const focus = y + window.innerHeight * 0.5
+  const focus = y + scroll.viewportHeight * 0.5
   let chapterIndex = -1
   let chapterProgress = 0
   for (const s of measured) {
@@ -234,7 +238,7 @@ export function startScrollEngine(): () => void {
   document.fonts?.ready.then(() => measure()).catch(() => {})
 
   lastTime = 0
-  lastProgress = window.scrollY / Math.max(1, document.documentElement.scrollHeight - window.innerHeight)
+  lastProgress = window.scrollY / Math.max(1, scroll.documentHeight - scroll.viewportHeight)
   scroll.smooth = lastProgress
   rafId = requestAnimationFrame(frame)
 

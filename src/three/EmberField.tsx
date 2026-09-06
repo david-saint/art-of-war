@@ -1,12 +1,15 @@
 'use client'
 
-import { useTexture } from '@react-three/drei'
 import { useFrame } from '@react-three/fiber'
 import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { EMBER_FRAG, EMBER_VERT, SMOKE_FRAG, SMOKE_VERT } from '@/shaders/embers'
 import { PROFILES } from './quality'
 import { useExperience } from '@/store/experience'
+import { useSceneTextures } from './textures'
+import { CH12 } from './assets'
+
+const SPRITES = [CH12.ember, CH12.smoke]
 
 export type EmberFieldProps = {
   count?: number
@@ -91,18 +94,7 @@ export function EmberField({
   const emberMat = useRef<THREE.ShaderMaterial>(null)
   const smokeMat = useRef<THREE.ShaderMaterial>(null)
 
-  const [emberSprite, smokeSprite] = useTexture([
-    '/assets/generated/img/sprite/ember-01.webp',
-    '/assets/generated/img/ink/wash-cloud-01.webp',
-  ])
-
-  useMemo(() => {
-    for (const t of [emberSprite, smokeSprite]) {
-      if (!t) continue
-      t.colorSpace = THREE.NoColorSpace
-      t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping
-    }
-  }, [emberSprite, smokeSprite])
+  const [emberSprite, smokeSprite] = useSceneTextures(SPRITES)
 
   const nEmbers = Math.max(400, Math.round(count * scale))
   const nSmoke = Math.max(80, Math.round(smokeCount * scale))
@@ -175,6 +167,7 @@ export function EmberField({
       <points geometry={smokeGeo} renderOrder={5}>
         <shaderMaterial
           ref={smokeMat}
+          dispose={null}
           vertexShader={SMOKE_VERT}
           fragmentShader={SMOKE_FRAG}
           uniforms={smokeUniforms}
@@ -187,6 +180,7 @@ export function EmberField({
       <points geometry={emberGeo} renderOrder={6}>
         <shaderMaterial
           ref={emberMat}
+          dispose={null}
           vertexShader={EMBER_VERT}
           fragmentShader={EMBER_FRAG}
           uniforms={emberUniforms}
