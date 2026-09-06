@@ -2,7 +2,7 @@
   "name": "art-of-war",
   "version": "0.1.0",
   "private": true,
-  "description": "\u5175\u6cd5 \u2014 The Art of War: a cinematic WebGL scrollytelling experience",
+  "description": "兵法 — The Art of War: a cinematic WebGL scrollytelling experience",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -11,7 +11,9 @@
     "typecheck": "tsc --noEmit",
     "assets:images": "node scripts/gen-images.mjs",
     "assets:audio": "node scripts/gen-audio.mjs",
-    "assets:codex": "node --experimental-strip-types scripts/gen-codex.mjs"
+    "assets:codex": "node --experimental-strip-types scripts/gen-codex.mjs",
+    "bench": "node scripts/bench.mjs",
+    "bench:compare": "node scripts/bench-compare.mjs"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.8",
