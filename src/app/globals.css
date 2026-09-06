@@ -1,0 +1,238 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens.
+ *
+ * Every value here is answerable to the art direction bible in
+ * docs/_research/manifesto.md. Three rules that look like style choices but are
+ * actually constraints:
+ *
+ *   - There is no blue in this palette. Not one value. Water kills a mark by
+ *     taking its identity, not by changing its temperature.
+ *   - Ink is pine soot: cool and faintly green at density, warm at dilution.
+ *     Never a neutral grey ramp, never #000.
+ *   - The accents are substances with meanings, not a UI palette. Jade is
+ *     cognition, gold is authority and expenditure, vermilion is the seal and
+ *     blood. They are not interchangeable and they are never gradients.
+ */
+
+@theme {
+  /* --- 松煙墨 pine-soot ink ------------------------------------------- */
+  --color-ink-950: #0B0F0E;
+  --color-ink-900: #131917;
+  --color-ink-800: #1B2321;
+  --color-ink-700: #2A3532;
+  --color-ink-600: #3E4A47;
+  --color-ink-500: #5A6764;
+  --color-ink-400: #7C8985;
+  --color-ink-300: #9BA6A2;
+  --color-ink-200: #B9C0BB;
+  --color-ink-100: #D5DAD6;
+
+  /* --- 宣紙 xuan paper ------------------------------------------------- */
+  --color-paper-050: #F4F0E6;  /* 留白 — reserved white. The most valuable pixel here. */
+  --color-paper-100: #E8E2D4;  /* ground */
+  --color-paper-200: #DCD3BE;  /* aged */
+  --color-paper-300: #CBC0A6;
+  --color-paper-400: #B2A487;
+
+  /* --- 石綠 malachite: cognition, and nothing else --------------------- */
+  --color-jade-700: #1F4A3D;
+  --color-jade-500: #2F6B5A;
+  --color-jade-400: #5C9A86;
+  --color-jade-200: #9CC4B4;
+
+  /* --- 金 gold leaf: sovereignty and expenditure ----------------------- */
+  --color-gold-700: #8A6D14;
+  --color-gold-500: #C9A227;
+  --color-gold-300: #E8CE72;
+
+  /* --- 朱砂 cinnabar: the seal, and blood ------------------------------ */
+  --color-vermilion-700: #A82B23;
+  --color-vermilion-500: #C1352B;
+  --color-vermilion-400: #D9432F;
+
+  /* Carbon mixed with cinnabar muddies to this. Never pink, never orange. */
+  --color-muddied: #2A1410;
+
+  /* --- type ------------------------------------------------------------ */
+  --font-serif: var(--font-newsreader), "Newsreader", Georgia, serif;
+  --font-sans: var(--font-inter), "Inter", system-ui, sans-serif;
+  --font-mono: var(--font-mono-plex), "IBM Plex Mono", ui-monospace, monospace;
+  --font-han: var(--font-noto-han), "Noto Serif TC", "Songti TC", serif;
+
+  --text-micro: 0.6875rem;   /* HUD numerals, ledger rows */
+  --text-caption: 0.8125rem;
+  --text-body: 1.0625rem;
+  --text-lead: 1.375rem;
+  --text-dictum: clamp(1.75rem, 3.2vw, 3rem);
+  --text-title: clamp(2.5rem, 6vw, 5.5rem);
+  --text-glyph: clamp(6rem, 22vw, 22rem);   /* the display character */
+
+  /* --- cinematic frame -------------------------------------------------- */
+  --aspect-cinema: 2.39;
+  --letterbox-ease: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* --- motion ----------------------------------------------------------- */
+  /* Named curves. Use the name, never an inline bezier. */
+  --ease-brush: cubic-bezier(0.22, 1, 0.36, 1);      /* a stroke landing */
+  --ease-soak: cubic-bezier(0.33, 0, 0.15, 1);       /* ink entering paper */
+  --ease-seal: cubic-bezier(0.7, 0, 0.2, 1);         /* the press, decisive */
+  --ease-drift: cubic-bezier(0.4, 0, 0.6, 1);        /* fog, weather */
+
+  --dur-instant: 90ms;
+  --dur-quick: 220ms;
+  --dur-beat: 620ms;
+  --dur-soak: 1400ms;
+  --dur-scene: 2600ms;
+
+  --z-canvas: 0;
+  --z-scrim: 10;
+  --z-content: 20;
+  --z-letterbox: 30;
+  --z-hud: 40;
+  --z-node: 50;
+  --z-gate: 60;
+}
+
+:root {
+  --letterbox-bar: 0px;
+  --hud-inset: clamp(1rem, 2.5vw, 2.5rem);
+  color-scheme: dark;
+}
+
+/*
+ * Ground.
+ *
+ * The treatise is not uniformly dark. Most of it happens on a sheet of paper in
+ * daylight; four chapters happen at night — the march (9), death ground (11),
+ * fire (12) and the spy (13) — and those invert to an ink ground. Type has to
+ * follow, or half the site is unreadable.
+ *
+ * This is a token flip, not a second stylesheet: every component reads --fg,
+ * --fg-muted and --fg-faint and never names a colour directly. The accents do
+ * not flip, because jade, gold and vermilion mean the same thing on either
+ * ground and re-tinting them would break the colour doctrine.
+ */
+html[data-ground='paper'] {
+  --glyph-filter: none;
+  --fg: var(--color-ink-900);
+  --fg-muted: var(--color-ink-600);
+  --fg-faint: var(--color-ink-400);
+  --surface: var(--color-paper-100);
+  --scrim: rgb(232 226 212 / 0.55);
+  --accent-quiet: var(--color-gold-700);
+}
+
+html[data-ground='ink'] {
+  /* Glyph plates are black ink on transparency. On an ink ground they have to
+     be flipped to read, which is a filter rather than a second set of assets. */
+  --glyph-filter: invert(1);
+  --fg: var(--color-paper-050);
+  --fg-muted: var(--color-ink-200);
+  --fg-faint: var(--color-ink-400);
+  --surface: var(--color-ink-950);
+  --scrim: rgb(11 15 14 / 0.62);
+  --accent-quiet: var(--color-gold-500);
+}
+
+html {
+  --fg: var(--color-paper-050);
+  --fg-muted: var(--color-ink-200);
+  --fg-faint: var(--color-ink-400);
+  --surface: var(--color-ink-950);
+  --scrim: rgb(11 15 14 / 0.78);
+  --accent-quiet: var(--color-gold-500);
+}
+
+/* Ground changes are a dissolve, not a cut — the ink transition covers the
+   swap, and these settle underneath it. */
+html,
+body {
+  transition:
+    background-color var(--dur-scene) var(--ease-drift),
+    color var(--dur-scene) var(--ease-drift);
+}
+
+html {
+  background: var(--surface);
+  scroll-behavior: auto; /* the scroll engine owns motion; never smooth-scroll the driver */
+}
+
+body {
+  margin: 0;
+  background: var(--surface);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: none;
+}
+
+/* The bars are the mounting silk of a hanging scroll, not a decoration. */
+.letterbox {
+  position: fixed;
+  left: 0;
+  right: 0;
+  height: var(--letterbox-bar);
+  background: var(--color-ink-950);
+  z-index: var(--z-letterbox);
+  pointer-events: none;
+  transition: height var(--dur-scene) var(--letterbox-ease);
+}
+.letterbox--top { top: 0; }
+.letterbox--bottom { bottom: 0; }
+
+/* Ground-relative type colour. Components never name an ink or paper value
+   directly — they say how loud the text is and let the ground decide. */
+.t-fg { color: var(--fg); }
+.t-muted { color: var(--fg-muted); }
+.t-faint { color: var(--fg-faint); }
+.t-gold { color: var(--accent-quiet); }
+
+.han {
+  font-family: var(--font-han);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+}
+
+/* 直書 — vertical setting for the display glyph column. */
+.han-vertical {
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  letter-spacing: 0.18em;
+}
+
+.rule-gold {
+  border: 0;
+  border-top: 1px solid var(--color-gold-700);
+  opacity: 0.55;
+}
+
+::selection {
+  background: var(--color-vermilion-700);
+  color: var(--color-paper-050);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-jade-400);
+  outline-offset: 3px;
+}
+
+/*
+ * Reduced motion is a render path, not a switch. The site keeps its letterbox,
+ * its typography and its meaning; what it loses is the soak. Ink cuts straight
+ * to its dried state.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .letterbox { transition: none; }
+}

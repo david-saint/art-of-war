@@ -1,0 +1,10 @@
+*.tsbuildinfo
+.DS_Store
+.env*.local
+.next
+.playwright-mcp
+.shots
+/public/assets/generated
+next-env.d.ts
+node_modules
+out
