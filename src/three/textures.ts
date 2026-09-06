@@ -70,6 +70,36 @@ export function setTextureRenderer(gl: THREE.WebGLRenderer | null) {
   renderer = gl
 }
 
+/**
+ * Uploads are queued one per animation frame. The copy itself is quick; what
+ * costs is the mipmap chain the driver builds for a 3168×1344 plate, about
+ * twenty milliseconds of main thread on Apple silicon. Two plates in one go
+ * is a visible stutter; one per frame is a frame that arrives a little late.
+ * A texture that gets drawn before its turn is uploaded by three at that draw,
+ * and its queued upload then finds nothing to do.
+ */
+const uploadQueue: THREE.Texture[] = []
+let uploadScheduled = false
+
+function drainUploads() {
+  uploadScheduled = false
+  const texture = uploadQueue.shift()
+  if (texture && renderer) renderer.initTexture(texture)
+  if (uploadQueue.length) {
+    uploadScheduled = true
+    requestAnimationFrame(drainUploads)
+  }
+}
+
+function scheduleUpload(texture: THREE.Texture) {
+  if (!renderer || typeof requestAnimationFrame === 'undefined') return
+  uploadQueue.push(texture)
+  if (!uploadScheduled) {
+    uploadScheduled = true
+    requestAnimationFrame(drainUploads)
+  }
+}
+
 function configure(texture: THREE.Texture, spec: TextureSpec) {
   switch (spec.kind) {
     case 'art':
@@ -170,10 +200,13 @@ function request(spec: TextureSpec): Entry {
     texture.needsUpdate = true
     entry.texture = texture
     entry.bitmap = bitmap
-    // Upload now, off the frame that will first draw it.
-    renderer?.initTexture(texture)
+    // Upload ahead of the frame that will first draw it.
+    scheduleUpload(texture)
     return texture
   })
+  // A load that fails after its component has gone would otherwise surface as
+  // an unhandled rejection; consumers still see the rejection through `use`.
+  entry.promise.catch(() => {})
   cache.set(key, entry)
   return entry
 }

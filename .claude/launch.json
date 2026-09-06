@@ -1,6 +1,7 @@
 {
   "version": "0.0.1",
   "configurations": [
-    { "name": "art-of-war", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev"], "port": 3000 }
+    { "name": "art-of-war", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev"], "port": 3000 },
+    { "name": "art-of-war-prod", "runtimeExecutable": "npx", "runtimeArgs": ["next", "start", "-p", "3200"], "port": 3200 }
   ]
 }

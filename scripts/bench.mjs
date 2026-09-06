@@ -5,17 +5,17 @@
 // chapter, and Codex Mode, and records per frame:
 //
 //   - frame cost          wall time of the rAF batch that renders the frame plus a
-//                         gl.finish() fence, i.e. CPU + GPU for exactly one frame
-//                         (vsync is unlocked, so the interval between frames is
-//                         throughput, not the display's refresh rate)
+//                         readPixels fence, i.e. main thread + GPU for exactly one
+//                         frame (vsync is unlocked, so the interval between frames
+//                         is throughput, not the display's refresh rate)
 //   - main-thread time    the rAF batch alone
 //   - draw calls, shader links (+ the time they block for), texture uploads
 //   - long tasks, JS heap, GPU texture bytes resident
 //
 // The page runs on a VIRTUAL CLOCK: performance.now, requestAnimationFrame and
 // setTimeout are replaced so that one tick is exactly 1/60 s and the clock
-// holds still while anything is loading (an image, a fetch, a script chunk, a
-// bitmap decode). Two consequences that matter:
+// holds still while an asset is loading (an image, a fetch, a bitmap decode).
+// Two consequences that matter:
 //
 //   1. Every run visits the same virtual frame at every mark, so screenshots
 //      taken at a mark are reproducible and can be pixel-compared between
@@ -67,6 +67,7 @@ const PROBE = String.raw`(() => {
   })
   const realNow = performance.now.bind(performance)
   const realRAF = window.requestAnimationFrame.bind(window)
+  const realSetTimeout = window.setTimeout.bind(window)
   const STEP = 1000 / 60
   let vnow = 0
   S.now = () => vnow
@@ -176,9 +177,10 @@ const PROBE = String.raw`(() => {
   // Anything asynchronous that the app waits for freezes virtual time until it
   // lands, so a scene mounts on the same virtual tick whatever the network
   // did. pendingMs is the real time spent held, attributed to the next frame.
-  function hold() {
+  function hold(what = '?') {
     if (S.pending === 0) S.pendingSince = realNow()
     S.pending++
+    S.holds = S.holds || []; S.holds.push({ what, t: realNow(), phase: S.phase })
     const start = realNow()
     let done = false
     return () => { if (done) return; done = true; S.pending = Math.max(0, S.pending - 1); S.pendingMs += realNow() - start }
@@ -188,7 +190,7 @@ const PROBE = String.raw`(() => {
     configurable: true, get: desc.get,
     set(v) {
       if (this.loading !== 'lazy') {
-        const release = hold()
+        const release = hold('img:' + v)
         const done = () => { release(); this.removeEventListener('load', done); this.removeEventListener('error', done) }
         this.addEventListener('load', done); this.addEventListener('error', done)
       }
@@ -197,32 +199,23 @@ const PROBE = String.raw`(() => {
   })
   const realFetch = window.fetch.bind(window)
   window.fetch = function (...a) {
-    const release = hold()
+    const release = hold('fetch:' + String(a[0]).slice(-40))
     return realFetch(...a).then((res) => {
       // Held until the body is consumed, which is when the app can act on it.
       for (const m of ['arrayBuffer', 'blob', 'json', 'text']) {
         const o = res[m].bind(res)
         res[m] = () => o().finally(release)
       }
-      // A body nobody reads must not hold the clock for ever.
-      window.setTimeout(release, 30000)
+      // A body nobody reads must not hold the clock for ever. Real time: the
+      // virtual timer could never fire while the clock is held.
+      realSetTimeout(release, 5000)
       return res
     }, (e) => { release(); throw e })
   }
   if (typeof createImageBitmap === 'function') {
     const realCIB = window.createImageBitmap.bind(window)
-    window.createImageBitmap = function (...a) { const release = hold(); return realCIB(...a).finally(release) }
+    window.createImageBitmap = function (...a) { const release = hold('bitmap'); return realCIB(...a).finally(release) }
   }
-  // The document has no element yet when an init script runs, so observe the
-  // document node itself.
-  new MutationObserver((muts) => {
-    for (const m of muts) for (const n of m.addedNodes) {
-      if (n.tagName === 'SCRIPT' && n.src) {
-        const release = hold()
-        n.addEventListener('load', release); n.addEventListener('error', release)
-      }
-    }
-  }).observe(document, { childList: true, subtree: true })
 
   try {
     new PerformanceObserver((l) => { for (const e of l.getEntries()) S.longTasks.push({ t: e.startTime, d: e.duration, phase: S.phase }) }).observe({ entryTypes: ['longtask'] })
@@ -344,6 +337,7 @@ async function measure(name, transitionFrames) {
       name,
       steadyDraws,
       frame: steady.slice(1).map((f, i) => f.t - steady[i].t),
+      cost: steady.map((f) => f.js + f.fin),
       js: steady.map((f) => f.js),
       fin: steady.map((f) => f.fin),
       transition: {
@@ -364,11 +358,12 @@ async function measure(name, transitionFrames) {
     }
   }, [name, transStart, steadyStart, steadyStart + STEADY_FRAMES])
   r.frame = stats(r.frame)
+  r.cost = stats(r.cost)
   r.js = stats(r.js)
   r.fin = stats(r.fin)
   phases.push(r)
   const tr = r.transition
-  process.stdout.write(`  ${name.padEnd(6)} frame ${fmt(r.frame.med)}/${fmt(r.frame.p95)}ms (js ${fmt(r.js.med)} fence ${fmt(r.fin.med)})  draws ${r.steadyDraws}  | swap: maxJs ${fmt(tr.maxJs)}ms links ${tr.links} (${fmt(tr.shaderMs)}ms) uploads ${tr.uploads} (${tr.uploadMB.toFixed(1)}MB, ${fmt(tr.uploadMs)}ms) gap ${fmt(tr.gapMs)}ms  | tex ${r.texMB.toFixed(0)}MB\n`)
+  process.stdout.write(`  ${name.padEnd(6)} cost ${fmt(r.cost.med)}/${fmt(r.cost.p95)}ms (js ${fmt(r.js.med)} gpu ${fmt(r.fin.med)}, interval ${fmt(r.frame.med)})  draws ${r.steadyDraws}  | swap: maxJs ${fmt(tr.maxJs)}ms links ${tr.links} (${fmt(tr.shaderMs)}ms) uploads ${tr.uploads} (${tr.uploadMB.toFixed(1)}MB, ${fmt(tr.uploadMs)}ms) gap ${fmt(tr.gapMs)}ms  | tex ${r.texMB.toFixed(0)}MB\n`)
   return r
 }
 function fmt(x) { return x == null ? '–' : x.toFixed(1) }
@@ -396,6 +391,7 @@ await setPhase('story')
 await measure('story', 60)
 
 // 5. Resources.
+const resourceList = await bench(() => performance.getEntriesByType('resource').map((e) => ({ name: e.name.replace(location.origin, ''), initiator: e.initiatorType, kb: Math.round(e.transferSize / 1024), t: Math.round(e.startTime) })))
 const resources = await bench(() => {
   const groups = {}
   for (const e of performance.getEntriesByType('resource')) {
@@ -412,9 +408,10 @@ const memory = await bench(() => ({ heapMB: performance.memory ? performance.mem
 const renderer = await bench(() => window.__bench.renderer)
 const events = await bench(() => window.__bench.events)
 const stacks = await bench(() => window.__bench.stacks)
+const holds = DUMP ? await bench(() => window.__bench.holds) : undefined
 const frames = DUMP ? await bench(() => window.__bench.frames) : undefined
 
-const result = { label, date: new Date().toISOString(), meta: { dpr: DPR, net: NET, renderer, viewport: '1600x900', gateReadMs: GATE_READ_MS, steadyFrames: STEADY_FRAMES }, nav, gate: { canvasBeforeEnter: gateEnd.gl, texMBBeforeEnter: gateEnd.texBytes / 1048576 }, enter, phases, resources, memory, events, stacks, frames, wallMs: Date.now() - t0 }
+const result = { label, date: new Date().toISOString(), meta: { dpr: DPR, net: NET, renderer, viewport: '1600x900', gateReadMs: GATE_READ_MS, steadyFrames: STEADY_FRAMES }, nav, gate: { canvasBeforeEnter: gateEnd.gl, texMBBeforeEnter: gateEnd.texBytes / 1048576 }, enter, phases, resources, resourceList, memory, events, stacks, holds, frames, wallMs: Date.now() - t0 }
 await writeFile(join(OUT, `${label}.json`), JSON.stringify(result, null, 2))
 process.stdout.write(`  resources: ${Object.entries(resources).map(([k, v]) => `${k} ${v.count}× ${(v.transferKB / 1024).toFixed(1)}MB`).join(', ')}\n`)
 process.stdout.write(`  wrote ${join(OUT, `${label}.json`)} (${((Date.now() - t0) / 1000).toFixed(0)}s)\n`)

@@ -50,18 +50,19 @@ const byName = (r) => Object.fromEntries(r.phases.map((p) => [p.name, p]))
 const PA = byName(A), PB = byName(B)
 const names = A.phases.map((p) => p.name).filter((n) => PB[n])
 
-out('## Per-frame cost at rest (median / p95, ms; vsync unlocked, GPU fenced)')
+out('## Per-frame cost at rest (median / p95, ms; main thread + GPU, fenced)')
 out()
 out('| Mark | Frame before | Frame after | Δ frame | Main thread before | after | Draws |')
 out('|---|---|---|---|---|---|---|')
 for (const n of names) {
   const a = PA[n], b = PB[n]
-  const dg = a.frame.med && b.frame.med ? `${(((b.frame.med - a.frame.med) / a.frame.med) * 100).toFixed(0)}% (${(a.frame.med / b.frame.med).toFixed(1)}×)` : '–'
-  out(`| ${n} | ${f(a.frame.med)} / ${f(a.frame.p95)} | ${f(b.frame.med)} / ${f(b.frame.p95)} | ${dg} | ${f(a.js.med)} / ${f(a.js.p95)} | ${f(b.js.med)} / ${f(b.js.p95)} | ${a.steadyDraws} → ${b.steadyDraws} |`)
+  const ca = a.cost ?? a.frame, cb = b.cost ?? b.frame
+  const dg = ca.med && cb.med ? `${(((cb.med - ca.med) / ca.med) * 100).toFixed(0)}% (${(ca.med / cb.med).toFixed(1)}×)` : '–'
+  out(`| ${n} | ${f(ca.med)} / ${f(ca.p95)} | ${f(cb.med)} / ${f(cb.p95)} | ${dg} | ${f(a.js.med)} / ${f(a.js.p95)} | ${f(b.js.med)} / ${f(b.js.p95)} | ${a.steadyDraws} → ${b.steadyDraws} |`)
 }
-const avg = (r, k) => { const xs = r.phases.filter((p) => /^ch/.test(p.name)).map((p) => p[k].med).filter((x) => x != null); return xs.reduce((s, x) => s + x, 0) / xs.length }
+const avg = (r, k) => { const xs = r.phases.filter((p) => /^ch/.test(p.name)).map((p) => (p[k] ?? p.frame).med).filter((x) => x != null); return xs.reduce((s, x) => s + x, 0) / xs.length }
 out()
-out(`Average chapter frame: ${delta(avg(A, 'frame'), avg(B, 'frame'))} → ${(1000 / avg(A, 'frame')).toFixed(0)} → ${(1000 / avg(B, 'frame')).toFixed(0)} fps attainable · main thread: ${delta(avg(A, 'js'), avg(B, 'js'))}`)
+out(`Average chapter frame: ${delta(avg(A, 'cost'), avg(B, 'cost'))} → ${(1000 / avg(A, 'cost')).toFixed(0)} → ${(1000 / avg(B, 'cost')).toFixed(0)} fps attainable · main thread: ${delta(avg(A, 'js'), avg(B, 'js'))}`)
 out()
 
 out('## Chapter transitions (the swap into each mark)')
