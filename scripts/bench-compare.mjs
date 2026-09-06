@@ -66,15 +66,15 @@ out()
 
 out('## Chapter transitions (the swap into each mark)')
 out()
-out('| Mark | Longest frame before → after (ms) | Shader links | Compile block (ms) | Uploads (MB) | Gap before → after (ms) | Image wait (ms) |')
+out('| Mark | Longest main-thread frame before → after (ms) | Shader links | Compile block (ms) | Uploads (MB) | Upload time (ms) | Load wait (ms) |')
 out('|---|---|---|---|---|---|---|')
 for (const n of names) {
   const a = PA[n].transition, b = PB[n].transition
-  out(`| ${n} | ${delta(a.maxJs, b.maxJs)} | ${a.links} → ${b.links} | ${delta(a.shaderMs, b.shaderMs)} | ${f(a.uploadMB)} → ${f(b.uploadMB)} | ${delta(a.gapMs, b.gapMs, true, 0)} | ${f(a.pendingMs, 0)} → ${f(b.pendingMs, 0)} |`)
+  out(`| ${n} | ${delta(a.maxJs, b.maxJs)} | ${a.links} → ${b.links} | ${delta(a.shaderMs, b.shaderMs)} | ${f(a.uploadMB)} → ${f(b.uploadMB)} | ${delta(a.uploadMs ?? 0, b.uploadMs ?? 0)} | ${f(a.pendingMs, 0)} → ${f(b.pendingMs, 0)} |`)
 }
 const sum = (r, k) => r.phases.filter((p) => /^ch/.test(p.name)).reduce((s, p) => s + p.transition[k], 0)
 out()
-out(`Across all thirteen chapters: shader links ${sum(A, 'links')} → ${sum(B, 'links')}, compile blocking ${f(sum(A, 'shaderMs'), 0)} → ${f(sum(B, 'shaderMs'), 0)} ms, uploads ${f(sum(A, 'uploadMB'))} → ${f(sum(B, 'uploadMB'))} MB, image waits ${f(sum(A, 'pendingMs'), 0)} → ${f(sum(B, 'pendingMs'), 0)} ms.`)
+out(`Across all thirteen chapters: shader links ${sum(A, 'links')} → ${sum(B, 'links')}, compile blocking ${f(sum(A, 'shaderMs'), 0)} → ${f(sum(B, 'shaderMs'), 0)} ms, uploads in the swap window ${f(sum(A, 'uploadMB'))} → ${f(sum(B, 'uploadMB'))} MB taking ${f(sum(A, 'uploadMs'), 0)} → ${f(sum(B, 'uploadMs'), 0)} ms of main thread, load waits ${f(sum(A, 'pendingMs'), 0)} → ${f(sum(B, 'pendingMs'), 0)} ms.`)
 out()
 
 out('## Memory')
