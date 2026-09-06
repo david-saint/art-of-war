@@ -67,7 +67,7 @@ out()
 
 out('## Chapter transitions (the swap into each mark)')
 out()
-out('| Mark | Longest main-thread frame before → after (ms) | Shader links | Compile block (ms) | Uploads (MB) | Upload time (ms) | Load wait (ms) |')
+out('| Mark | Longest main-thread frame before → after (ms) | Shader links | Compile block (ms) | Uploads (MB) | Upload time (ms) | Async load wait (ms) |')
 out('|---|---|---|---|---|---|---|')
 for (const n of names) {
   const a = PA[n].transition, b = PB[n].transition
@@ -103,7 +103,7 @@ const dirA = join(dirname(aPath), A.label), dirB = join(dirname(bPath), B.label)
 const shots = (await readdir(dirA)).filter((x) => x.endsWith('.png'))
 const browser = await chromium.launch()
 const page = await browser.newPage()
-out('## Visual diff (same virtual frame, both builds)')
+out('## Visual diff (seeded visit, same virtual frame in both builds)')
 out()
 out(`| Mark | Pixels changed (> ${THRESHOLD}/255) | Max channel Δ | Mean Δ |`)
 out('|---|---|---|---|')

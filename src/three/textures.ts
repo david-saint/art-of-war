@@ -48,6 +48,14 @@ export type TextureSpec = {
   kind: TextureKind
   /** Anisotropic filtering level; 'tier' resolves against the quality profile at load time. */
   anisotropy?: number | 'tier'
+  /**
+   * Build the mipmap chain at decode time, on a worker, instead of asking the
+   * driver for it at upload. generateMipmap on a 3168×1344 plate is ~35ms of
+   * main thread on Apple silicon; twelve resized bitmaps uploaded in turn are
+   * a few. Each level is the previous one halved with a bilinear filter, which
+   * is the same 2×2 box the driver would have used.
+   */
+  mips?: 'chain'
 }
 
 export const textureKey = (s: TextureSpec) => `${s.kind}/${s.anisotropy ?? 1}:${s.url}`
@@ -57,7 +65,8 @@ type Entry = {
   spec: TextureSpec
   promise: Promise<THREE.Texture>
   texture: THREE.Texture | null
-  bitmap: ImageBitmap | null
+  /** Decoded bitmaps owned by this entry: level 0, plus the chain if one was built. */
+  bitmaps: ImageBitmap[]
   /** Components currently rendering with this texture. Never evicted while > 0. */
   users: number
 }
@@ -160,7 +169,9 @@ function canFlipBitmaps(): Promise<boolean> {
   return bitmapProbe
 }
 
-async function decode(url: string): Promise<{ image: ImageBitmap | HTMLImageElement; bitmap: ImageBitmap | null }> {
+type Decoded = { image: ImageBitmap | HTMLImageElement; bitmaps: ImageBitmap[]; levels: ImageBitmap[] | null }
+
+async function decode(url: string, chain: boolean): Promise<Decoded> {
   if (await canFlipBitmaps()) {
     const res = await fetch(url)
     if (!res.ok) throw new Error(`${res.status} ${url}`)
@@ -170,12 +181,33 @@ async function decode(url: string): Promise<{ image: ImageBitmap | HTMLImageElem
       premultiplyAlpha: 'none',
       colorSpaceConversion: 'none',
     })
-    return { image: bitmap, bitmap }
+    if (!chain) return { image: bitmap, bitmaps: [bitmap], levels: null }
+
+    // Level i is max(1, floor(w / 2^i)), which successive halving reproduces
+    // exactly; the loop ends at 1×1, so the chain is complete and the texture
+    // needs no further levels to be sampled at any distance.
+    const levels = [bitmap]
+    let w = bitmap.width
+    let h = bitmap.height
+    while (w > 1 || h > 1) {
+      w = Math.max(1, Math.floor(w / 2))
+      h = Math.max(1, Math.floor(h / 2))
+      levels.push(
+        await createImageBitmap(levels[levels.length - 1], {
+          resizeWidth: w,
+          resizeHeight: h,
+          resizeQuality: 'medium',
+          premultiplyAlpha: 'none',
+          colorSpaceConversion: 'none',
+        }),
+      )
+    }
+    return { image: bitmap, bitmaps: levels, levels }
   }
   const image = new Image()
   image.src = url
   await image.decode()
-  return { image, bitmap: null }
+  return { image, bitmaps: [], levels: null }
 }
 
 // ------------------------------------------------------------------ cache
@@ -185,21 +217,25 @@ function request(spec: TextureSpec): Entry {
   const existing = cache.get(key)
   if (existing) return existing
 
-  const entry: Entry = { key, spec, promise: null as unknown as Promise<THREE.Texture>, texture: null, bitmap: null, users: 0 }
-  entry.promise = decode(spec.url).then(({ image, bitmap }) => {
+  const entry: Entry = { key, spec, promise: null as unknown as Promise<THREE.Texture>, texture: null, bitmaps: [], users: 0 }
+  entry.promise = decode(spec.url, spec.mips === 'chain' && spec.kind === 'art').then(({ image, bitmaps, levels }) => {
     // The cache may have been cleared while this was in flight; do not
     // resurrect an evicted entry with a texture nobody will dispose.
     if (cache.get(key) !== entry) {
-      bitmap?.close()
+      for (const b of bitmaps) b.close()
       throw new Error(`texture evicted while loading: ${spec.url}`)
     }
     const texture = new THREE.Texture(image)
     // ImageBitmaps are pre-flipped at decode; elements are flipped on upload.
-    texture.flipY = bitmap === null
+    texture.flipY = bitmaps.length === 0
     configure(texture, spec)
+    if (levels) {
+      texture.mipmaps = levels as unknown as THREE.Texture['mipmaps']
+      texture.generateMipmaps = false
+    }
     texture.needsUpdate = true
     entry.texture = texture
-    entry.bitmap = bitmap
+    entry.bitmaps = bitmaps
     // Upload ahead of the frame that will first draw it.
     scheduleUpload(texture)
     return texture
@@ -214,9 +250,9 @@ function request(spec: TextureSpec): Entry {
 function release(entry: Entry) {
   cache.delete(entry.key)
   entry.texture?.dispose()
-  entry.bitmap?.close()
+  for (const b of entry.bitmaps) b.close()
   entry.texture = null
-  entry.bitmap = null
+  entry.bitmaps = []
 }
 
 /** Starts loading (and uploading) a set of textures. Resolves when all have settled. */

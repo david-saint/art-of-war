@@ -68,6 +68,7 @@ const PROBE = String.raw`(() => {
   const realNow = performance.now.bind(performance)
   const realRAF = window.requestAnimationFrame.bind(window)
   const realSetTimeout = window.setTimeout.bind(window)
+  S.bootStart = realNow()
   const STEP = 1000 / 60
   let vnow = 0
   S.now = () => vnow
@@ -101,6 +102,13 @@ const PROBE = String.raw`(() => {
       // Hold the clock while anything is in flight, but never for ever: a lazy
       // image that never enters the viewport would otherwise stall the run.
       if (realNow() - S.pendingSince > 10000) { S.events.push({ t: realNow(), what: 'pending-timeout', phase: S.phase }); S.pending = 0 }
+      else { schedule(); return }
+    }
+    // The deterministic run does not let virtual time start until the WebGL
+    // context exists, so both builds create it at t=0 and every time-driven
+    // motion (camera drift, plate sway, ink flow) has the same phase.
+    if (S.holdUntilGL && !S.gl) {
+      if (realNow() - S.bootStart > 15000) { S.events.push({ t: realNow(), what: 'gl-timeout' }); S.holdUntilGL = false }
       else { schedule(); return }
     }
     vnow += STEP
@@ -212,6 +220,18 @@ const PROBE = String.raw`(() => {
       return res
     }, (e) => { release(); throw e })
   }
+  // Dynamically loaded chunks. The setter runs before the element is inserted,
+  // so the listener is always attached ahead of the load event.
+  const sdesc = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'src')
+  Object.defineProperty(HTMLScriptElement.prototype, 'src', {
+    configurable: true, get: sdesc.get,
+    set(v) {
+      const release = hold('script:' + String(v).slice(-30))
+      const done = () => { release(); this.removeEventListener('load', done); this.removeEventListener('error', done) }
+      this.addEventListener('load', done); this.addEventListener('error', done)
+      sdesc.set.call(this, v)
+    },
+  })
   if (typeof createImageBitmap === 'function') {
     const realCIB = window.createImageBitmap.bind(window)
     window.createImageBitmap = function (...a) { const release = hold('bitmap'); return realCIB(...a).finally(release) }
@@ -248,16 +268,33 @@ const dir = join(OUT, label)
 await mkdir(dir, { recursive: true })
 
 const browser = await chromium.launch({ headless: true, args: ['--ignore-gpu-blocklist', '--use-angle=default', '--enable-gpu', '--disable-frame-rate-limit', '--disable-gpu-vsync'] })
-const context = await browser.newContext({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: DPR, reducedMotion: 'no-preference' })
-const page = await context.newPage()
-await page.addInitScript(PROBE)
-if (NETWORKS[NET]) {
-  const cdp = await context.newCDPSession(page)
-  await cdp.send('Network.enable')
-  await cdp.send('Network.emulateNetworkConditions', { offline: false, ...NETWORKS[NET] })
+
+// Each run is two page loads in separate browser contexts (separate caches):
+//   A. the gate flow, for what a first-time reader waits for after Enter —
+//      real network timing, so not tick-deterministic;
+//   B. a seeded visit that skips the gate and whose clock starts at context
+//      creation, for everything that has to line up frame for frame.
+async function open(seeded) {
+  const context = await browser.newContext({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: DPR, reducedMotion: 'no-preference' })
+  const page = await context.newPage()
+  await page.addInitScript(PROBE)
+  if (seeded) {
+    await page.addInitScript(() => {
+      localStorage.setItem('bingfa.v1', JSON.stringify({ state: { entered: true, audioEnabled: false, mode: 'story', visited: [], decisions: {}, masterVolume: 0.7, captions: true }, version: 1 }))
+      window.__bench.holdUntilGL = true
+    })
+  }
+  if (NETWORKS[NET]) {
+    const cdp = await context.newCDPSession(page)
+    await cdp.send('Network.enable')
+    await cdp.send('Network.emulateNetworkConditions', { offline: false, ...NETWORKS[NET] })
+  }
+  page.on('pageerror', (e) => console.error('  [pageerror]', String(e).slice(0, 200)))
+  page.on('console', (m) => { if (m.type() === 'error') console.error('  [console]', m.text().slice(0, 200)) })
+  return { context, page }
 }
-page.on('pageerror', (e) => console.error('  [pageerror]', String(e).slice(0, 200)))
-page.on('console', (m) => { if (m.type() === 'error') console.error('  [console]', m.text().slice(0, 200)) })
+
+let { context, page } = await open(false)
 
 const bench = (fn, arg) => page.evaluate(fn, arg)
 const setPhase = (phase) => bench((p) => { window.__bench.phase = p }, phase)
@@ -312,6 +349,12 @@ const enter = await bench((gateReal) => {
   }
 }, gateEnd.real)
 process.stdout.write(`  enter: first frame ${enter.firstFrameMs.toFixed(0)}ms, hero ready ${enter.heroReadyMs.toFixed(0)}ms, ${enter.links} links (${enter.shaderMs.toFixed(0)}ms), ${enter.uploads} uploads\n`)
+await context.close()
+
+// B. The deterministic visit.
+;({ context, page } = await open(true))
+await page.goto(url, { waitUntil: 'domcontentloaded' })
+await page.waitForFunction(() => !!window.__bench.gl, null, { timeout: 60000 })
 
 // 2. Hero at rest.
 const phases = []
