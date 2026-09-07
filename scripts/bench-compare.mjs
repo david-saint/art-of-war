@@ -48,7 +48,7 @@ out()
 
 const byName = (r) => Object.fromEntries(r.phases.map((p) => [p.name, p]))
 const PA = byName(A), PB = byName(B)
-const names = A.phases.map((p) => p.name).filter((n) => PB[n])
+const names = A.phases.map((p) => p.name).filter((n) => PB[n] && n !== 'scrub')
 
 out('## Per-frame cost at rest (median / p95, ms; main thread + GPU, fenced)')
 out()
@@ -63,6 +63,26 @@ for (const n of names) {
 const avg = (r, k) => { const xs = r.phases.filter((p) => /^ch/.test(p.name)).map((p) => (p[k] ?? p.frame).med).filter((x) => x != null); return xs.reduce((s, x) => s + x, 0) / xs.length }
 out()
 out(`Average chapter frame: ${delta(avg(A, 'cost'), avg(B, 'cost'))} → ${(1000 / avg(A, 'cost')).toFixed(0)} → ${(1000 / avg(B, 'cost')).toFixed(0)} fps attainable · main thread: ${delta(avg(A, 'js'), avg(B, 'js'))}`)
+out()
+
+out('## The DOM: main thread outside the render loop (React, style, layout, paint)')
+out()
+out('| Where | before → after |')
+out('|---|---|')
+const S_A = PA.scrub, S_B = PB.scrub
+if (S_A && S_B) {
+  out(`| Scrolling through a chapter, per tick (median / p95, ms) | ${f(S_A.other.med)} / ${f(S_A.other.p95)} → ${f(S_B.other.med)} / ${f(S_B.other.p95)} |`)
+  out(`| Scrolling through a chapter, total over ${S_A.other.n + 1} ticks (ms) | ${delta(S_A.transition.otherMs, S_B.transition.otherMs, true, 0)} |`)
+  out(`| Scrolling through a chapter, worst tick (ms) | ${delta(S_A.transition.maxOther, S_B.transition.maxOther)} |`)
+  out(`| Scrolling through a chapter, worst frame interval (ms) | ${delta(S_A.transition.maxFrame, S_B.transition.maxFrame)} |`)
+  out(`| Scrolling through a chapter, render cost per tick (ms) | ${delta(S_A.cost.med, S_B.cost.med)} |`)
+}
+const sumOther = (r) => r.phases.filter((p) => /^ch/.test(p.name)).reduce((s, p) => s + (p.transition.otherMs ?? 0), 0)
+const maxOther = (r) => Math.max(...r.phases.filter((p) => /^ch/.test(p.name)).map((p) => p.transition.maxOther ?? 0))
+out(`| Arriving at each chapter, total across thirteen (ms) | ${delta(sumOther(A), sumOther(B), true, 0)} |`)
+out(`| Arriving at a chapter, worst tick (ms) | ${delta(maxOther(A), maxOther(B))} |`)
+const avgOther = (r) => { const xs = r.phases.filter((p) => /^ch/.test(p.name)).map((p) => p.other?.med).filter((x) => x != null); return xs.reduce((s, x) => s + x, 0) / Math.max(1, xs.length) }
+out(`| At rest in a chapter, per tick (median, ms) | ${delta(avgOther(A), avgOther(B), true, 2)} |`)
 out()
 
 out('## Chapter transitions (the swap into each mark)')

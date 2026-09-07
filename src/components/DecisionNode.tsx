@@ -43,6 +43,36 @@ import type { DecisionNode as DecisionData } from '@/data/chapters'
  * navigates away with the browser's back button never lands on a dead page.
  */
 
+/**
+ * One arming watcher for every node on the page.
+ *
+ * Each node used to run its own requestAnimationFrame loop for the life of
+ * the session — thirteen callbacks a frame, twelve of them asking about a
+ * chapter the reader is nowhere near. Nodes register the mark they arm at, and
+ * a single loop checks only the chapter the reader is in.
+ */
+const marks = new Map<number, number>()
+let watcher = 0
+
+function runWatcher() {
+  watcher = requestAnimationFrame(runWatcher)
+  if (decision.phase !== 'dormant') return
+  const at = marks.get(scroll.chapterIndex)
+  if (at !== undefined && scroll.chapterProgress >= at) arm(scroll.chapterIndex)
+}
+
+function watchArming(chapter: number, at: number): () => void {
+  marks.set(chapter, at)
+  if (marks.size === 1) watcher = requestAnimationFrame(runWatcher)
+  return () => {
+    marks.delete(chapter)
+    if (marks.size === 0) cancelAnimationFrame(watcher)
+  }
+}
+
+/** What an inactive node sees: a stable snapshot, so it never re-renders. */
+const DORMANT = { chapter: -1, phase: 'dormant', hovered: null, chosen: null } as const
+
 export type DecisionNodeProps = {
   chapter: number
   data: DecisionData
@@ -51,7 +81,16 @@ export type DecisionNodeProps = {
 }
 
 export function DecisionNode({ chapter, data, at = 0.62 }: DecisionNodeProps) {
-  const snap = useSyncExternalStore(subscribeDecision, getDecisionSnapshot, getServerDecisionSnapshot)
+  // Only the node whose chapter owns the frame reads the live snapshot; the
+  // other twelve get a constant and stay out of every publish.
+  const snap = useSyncExternalStore(
+    subscribeDecision,
+    () => {
+      const live = getDecisionSnapshot()
+      return live.chapter === chapter ? live : DORMANT
+    },
+    getServerDecisionSnapshot,
+  )
   const stored = useExperience((s) => s.decisions[chapter])
   const commitDecision = useExperience((s) => s.commitDecision)
   const reduced = useExperience((s) => s.reducedMotion)
@@ -61,20 +100,10 @@ export function DecisionNode({ chapter, data, at = 0.62 }: DecisionNodeProps) {
   const active = snap.chapter === chapter
   const alreadyResolved = Boolean(stored)
 
-  // Arming watcher. Runs on rAF rather than on the scroll event so it reads the
-  // same snapshot the renderer does, and it costs one comparison per frame.
+  // Arms this node when the reader reaches its mark. Shared loop; see above.
   useEffect(() => {
     if (alreadyResolved) return
-    let raf = 0
-    const check = () => {
-      raf = requestAnimationFrame(check)
-      if (decision.phase !== 'dormant') return
-      if (scroll.chapterIndex !== chapter) return
-      if (scroll.chapterProgress < at) return
-      arm(chapter)
-    }
-    raf = requestAnimationFrame(check)
-    return () => cancelAnimationFrame(raf)
+    return watchArming(chapter, at)
   }, [chapter, at, alreadyResolved])
 
   // Take the frame the moment this node is armed.

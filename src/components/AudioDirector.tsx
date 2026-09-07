@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
-import { useDiscreteScroll } from '@/lib/useScroll'
+import { useChapterIndex } from '@/lib/useScroll'
 import { useExperience } from '@/store/experience'
 import { getAudioEngine } from '@/lib/audio'
 import { CHAPTER_IDENTITY } from '@/data/chapters'
@@ -36,7 +36,7 @@ const CHAPTER_TEXTURE: Record<number, string> = {
 }
 
 export function AudioDirector() {
-  const { chapterIndex } = useDiscreteScroll()
+  const chapterIndex = useChapterIndex()
   const audioEnabled = useExperience((s) => s.audioEnabled)
   const masterVolume = useExperience((s) => s.masterVolume)
   const entered = useExperience((s) => s.entered)

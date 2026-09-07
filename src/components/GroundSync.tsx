@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect } from 'react'
-import { useDiscreteScroll } from '@/lib/useScroll'
+import { useChapterIndex } from '@/lib/useScroll'
 import { groundFor, GROUND_HEX } from '@/lib/ground'
 
 /**
@@ -10,7 +10,7 @@ import { groundFor, GROUND_HEX } from '@/lib/ground'
  * boundaries and nowhere near the render loop.
  */
 export function GroundSync() {
-  const { chapterIndex } = useDiscreteScroll()
+  const chapterIndex = useChapterIndex()
   const ground = chapterIndex >= 1 ? groundFor(chapterIndex) : 'paper'
 
   useEffect(() => {

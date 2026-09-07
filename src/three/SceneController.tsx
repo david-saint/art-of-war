@@ -2,7 +2,7 @@
 
 import { useThree } from '@react-three/fiber'
 import { Suspense, useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
-import { useDiscreteScroll } from '@/lib/useScroll'
+import { useChapterIndex } from '@/lib/useScroll'
 import { useExperience } from '@/store/experience'
 import { AssetBoundary } from './AssetBoundary'
 import { CameraRig } from './CameraRig'
@@ -47,7 +47,7 @@ export type SceneControllerProps = {
 }
 
 export function SceneController({ scenes, onCoverChange, coverMs = 900 }: SceneControllerProps) {
-  const { chapterIndex } = useDiscreteScroll()
+  const chapterIndex = useChapterIndex()
   const reduced = useExperience((s) => s.reducedMotion)
   const [active, setActive] = useState(chapterIndex)
   const phase = useRef<Phase>('idle')

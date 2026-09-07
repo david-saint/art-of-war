@@ -112,6 +112,12 @@ const PROBE = String.raw`(() => {
       else { schedule(); return }
     }
     vnow += STEP
+    // A scrub walks the page a step per tick, so a scroll-through is the same
+    // sequence of positions in every run.
+    if (S.scrub) {
+      const sc = S.scrub
+      if (sc.i <= sc.n) { window.scrollTo(0, sc.y0 + (sc.y1 - sc.y0) * (sc.i / sc.n)); sc.i++ } else S.scrub = null
+    }
     const rec = { v: vnow, t: realNow(), phase: S.phase, draws: 0, links: 0, shaderMs: 0, uploads: 0, uploadBytes: 0, uploadMs: 0, mips: 0, js: 0, fin: 0, pendingMs: S.pendingMs }
     S.pendingMs = 0
     S.frames.push(rec)
@@ -381,11 +387,16 @@ async function measure(name, transitionFrames) {
       steadyDraws,
       frame: steady.slice(1).map((f, i) => f.t - steady[i].t),
       cost: steady.map((f) => f.js + f.fin),
+      // Main thread between one frame and the next that is not the render
+      // loop: React commits, style, layout, paint. The DOM's cost.
+      other: steady.slice(1).map((f, i) => Math.max(0, f.t - steady[i].t - steady[i].js - steady[i].fin)),
       js: steady.map((f) => f.js),
       fin: steady.map((f) => f.fin),
       transition: {
         maxJs: Math.max(...trans.map((f) => f.js)),
         maxFrame: Math.max(...trans.slice(1).map((f, i) => f.t - trans[i].t)),
+        otherMs: trans.slice(1).reduce((s, f, i) => s + Math.max(0, f.t - trans[i].t - trans[i].js - trans[i].fin), 0),
+        maxOther: Math.max(...trans.slice(1).map((f, i) => Math.max(0, f.t - trans[i].t - trans[i].js - trans[i].fin))),
         links: trans.reduce((s, f) => s + f.links, 0),
         shaderMs: trans.reduce((s, f) => s + f.shaderMs, 0),
         uploads: trans.reduce((s, f) => s + f.uploads, 0),
@@ -402,11 +413,12 @@ async function measure(name, transitionFrames) {
   }, [name, transStart, steadyStart, steadyStart + STEADY_FRAMES])
   r.frame = stats(r.frame)
   r.cost = stats(r.cost)
+  r.other = stats(r.other)
   r.js = stats(r.js)
   r.fin = stats(r.fin)
   phases.push(r)
   const tr = r.transition
-  process.stdout.write(`  ${name.padEnd(6)} cost ${fmt(r.cost.med)}/${fmt(r.cost.p95)}ms (js ${fmt(r.js.med)} gpu ${fmt(r.fin.med)}, interval ${fmt(r.frame.med)})  draws ${r.steadyDraws}  | swap: maxJs ${fmt(tr.maxJs)}ms links ${tr.links} (${fmt(tr.shaderMs)}ms) uploads ${tr.uploads} (${tr.uploadMB.toFixed(1)}MB, ${fmt(tr.uploadMs)}ms) gap ${fmt(tr.gapMs)}ms  | tex ${r.texMB.toFixed(0)}MB\n`)
+  process.stdout.write(`  ${name.padEnd(6)} cost ${fmt(r.cost.med)}/${fmt(r.cost.p95)}ms (js ${fmt(r.js.med)} gpu ${fmt(r.fin.med)} dom ${fmt(r.other.med)})  draws ${r.steadyDraws}  | swap: maxJs ${fmt(tr.maxJs)}ms dom ${fmt(tr.otherMs)}ms (max ${fmt(tr.maxOther)}) links ${tr.links} (${fmt(tr.shaderMs)}ms) uploads ${tr.uploads} (${tr.uploadMB.toFixed(1)}MB, ${fmt(tr.uploadMs)}ms) gap ${fmt(tr.gapMs)}ms  | tex ${r.texMB.toFixed(0)}MB\n`)
   return r
 }
 function fmt(x) { return x == null ? '–' : x.toFixed(1) }
@@ -424,7 +436,36 @@ for (const n of CHAPTERS) {
   await shot(name)
 }
 
-// 4. Codex Mode: the canvas is behind a blurred scrim.
+// 4. Scroll through a chapter's beats, a step per tick, and measure the whole
+//    main thread while the page's copy hands off underneath the reader.
+const SCRUB_CHAPTER = Number(process.env.BENCH_SCRUB ?? 3)
+const SCRUB_FRAMES = 240
+await setPhase('scrub')
+await bench(([n, frames]) => {
+  const el = document.getElementById(`chapter-${n}`)
+  const top = el.getBoundingClientRect().top + window.scrollY
+  const h = el.offsetHeight
+  const vh = window.innerHeight
+  // Stops short of the decision node's mark (0.74), which would lock the page.
+  window.__bench.scrub = { y0: top + h * 0.05 - vh * 0.5, y1: top + h * 0.7 - vh * 0.5, n: frames, i: 0 }
+}, [SCRUB_CHAPTER, SCRUB_FRAMES])
+{
+  const start = await frameCount()
+  await waitFrames(SCRUB_FRAMES + 2)
+  const r = await bench(([a, b]) => {
+    const fs = window.__bench.frames.slice(a, b)
+    const other = fs.slice(1).map((f, i) => Math.max(0, f.t - fs[i].t - fs[i].js - fs[i].fin))
+    const interval = fs.slice(1).map((f, i) => f.t - fs[i].t)
+    return { name: 'scrub', steadyDraws: 0, cost: fs.map((f) => f.js + f.fin), other, frame: interval, js: fs.map((f) => f.js), fin: fs.map((f) => f.fin),
+      transition: { maxJs: Math.max(...fs.map((f) => f.js)), maxFrame: Math.max(...interval), otherMs: other.reduce((s, x) => s + x, 0), maxOther: Math.max(...other), links: 0, shaderMs: 0, uploads: fs.reduce((s, f) => s + f.uploads, 0), uploadMB: 0, uploadMs: fs.reduce((s, f) => s + f.uploadMs, 0), mips: 0, pendingMs: 0, gapMs: 0, longTasks: 0 },
+      texMB: window.__bench.texBytes / 1048576, heapMB: performance.memory ? performance.memory.usedJSHeapSize / 1048576 : null }
+  }, [start, start + SCRUB_FRAMES])
+  for (const k of ['cost', 'other', 'frame', 'js', 'fin']) r[k] = stats(r[k])
+  phases.push(r)
+  process.stdout.write(`  scrub  ch${SCRUB_CHAPTER} 0.05→0.70 over ${SCRUB_FRAMES} ticks: cost ${fmt(r.cost.med)}/${fmt(r.cost.p95)}ms  dom ${fmt(r.other.med)}/${fmt(r.other.p95)}ms (sum ${fmt(r.transition.otherMs)}, max ${fmt(r.transition.maxOther)})  worst interval ${fmt(r.transition.maxFrame)}ms\n`)
+}
+
+// 5. Codex Mode: the canvas is behind a blurred scrim.
 await setPhase('codex')
 await page.click('button:has-text("Codex")')
 await measure('codex', 60)
@@ -433,7 +474,7 @@ await page.keyboard.press('Escape')
 await setPhase('story')
 await measure('story', 60)
 
-// 5. Resources.
+// 6. Resources.
 const resourceList = await bench(() => performance.getEntriesByType('resource').map((e) => ({ name: e.name.replace(location.origin, ''), initiator: e.initiatorType, kb: Math.round(e.transferSize / 1024), t: Math.round(e.startTime) })))
 const resources = await bench(() => {
   const groups = {}

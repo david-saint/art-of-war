@@ -1,13 +1,9 @@
 'use client'
 
-import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useRef } from 'react'
 import { registerSection } from '@/lib/scroll'
-import {
-  getDecisionSnapshot,
-  getServerDecisionSnapshot,
-  subscribeDecision,
-} from '@/lib/decision'
-import { useBeatRef, useDiscreteScroll } from '@/lib/useScroll'
+import { useDecisionSignal } from '@/lib/useDecision'
+import { useBeatRef, useScrollSignal } from '@/lib/useScroll'
 import { CHAPTER_IDENTITY } from '@/data/chapters'
 import { useExperience } from '@/store/experience'
 
@@ -74,16 +70,19 @@ export function Beat({
   children: React.ReactNode
 }) {
   const beatRef = useBeatRef(chapter, index)
-  const { chapterIndex, beatIndex } = useDiscreteScroll()
-  const node = useSyncExternalStore(subscribeDecision, getDecisionSnapshot, getServerDecisionSnapshot)
+  // Both subscriptions are booleans about THIS beat, so the component renders
+  // when its own state flips and at no other time — not on rest, direction, a
+  // beat change three chapters away, or a hover over a node's options.
+  const here = useScrollSignal((d) => d.chapterIndex === chapter && d.beatIndex === index)
 
   // A decision node owns the frame for as long as it is up. Leaving the beat
   // behind it lit means the reader reads the chapter's copy and the Commander's
   // at the same time, which is the one moment in the site where that is wrong.
-  const nodeHasFrame =
-    node.chapter === chapter && node.phase !== 'dormant' && node.phase !== 'resolved'
+  const nodeHasFrame = useDecisionSignal(
+    (n) => n.chapter === chapter && n.phase !== 'dormant' && n.phase !== 'resolved',
+  )
 
-  const active = chapterIndex === chapter && beatIndex === index && !nodeHasFrame
+  const active = here && !nodeHasFrame
 
   if (!hold) {
     return (
@@ -129,9 +128,8 @@ function FlowBeat({
   index: number
   children: React.ReactNode
 }) {
-  const { chapterIndex, beatIndex } = useDiscreteScroll()
   const setFrame = useExperience((s) => s.setFrame)
-  const reading = chapterIndex === chapter && beatIndex === index
+  const reading = useScrollSignal((d) => d.chapterIndex === chapter && d.beatIndex === index)
 
   useEffect(() => {
     if (!reading) return

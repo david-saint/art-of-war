@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect } from 'react'
-import { useDiscreteScroll } from '@/lib/useScroll'
+import { useChapterIndex } from '@/lib/useScroll'
 import { useExperience } from '@/store/experience'
 import { ACTS, CHAPTER_IDENTITY } from '@/data/chapters'
 
@@ -20,7 +20,7 @@ import { ACTS, CHAPTER_IDENTITY } from '@/data/chapters'
  * progress: it sits in the same tree as the canvas.
  */
 export function WarCouncilHUD() {
-  const { chapterIndex } = useDiscreteScroll()
+  const chapterIndex = useChapterIndex()
   const entered = useExperience((s) => s.entered)
   const mode = useExperience((s) => s.mode)
   const toggleMode = useExperience((s) => s.toggleMode)

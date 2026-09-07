@@ -18,11 +18,34 @@ export function useScrollEngine(): void {
 }
 
 /**
- * Re-renders only when a quantised scroll field changes — chapter, direction,
- * rest, lock. Safe in the HUD. Never use this to drive an animation.
+ * Re-renders only when a quantised scroll field changes — chapter, beat,
+ * direction, rest, lock. Safe in the HUD. Never use this to drive an animation.
+ *
+ * Prefer `useScrollSignal` with a selector: a component that reads the whole
+ * snapshot re-renders when ANY field changes, and `atRest` flips on every
+ * scroll start and stop. With ninety-odd beats and nodes on the page, that is
+ * ninety reconciliations per flick of the wheel for a value none of them read.
  */
 export function useDiscreteScroll(): DiscreteScroll {
   return useSyncExternalStore(subscribeDiscrete, getDiscrete, getServerDiscrete)
+}
+
+/**
+ * Subscribes to one derived value of the quantised snapshot. The selector must
+ * return a primitive (or a stable reference): React compares snapshots by
+ * identity, and a fresh object every call would re-render for ever.
+ */
+export function useScrollSignal<T extends string | number | boolean | null>(selector: (d: DiscreteScroll) => T): T {
+  return useSyncExternalStore(
+    subscribeDiscrete,
+    () => selector(getDiscrete()),
+    () => selector(getServerDiscrete()),
+  )
+}
+
+/** The active chapter, and nothing else. */
+export function useChapterIndex(): number {
+  return useScrollSignal((d) => d.chapterIndex)
 }
 
 /** Ref callback that registers a DOM section with the scroll engine. */
