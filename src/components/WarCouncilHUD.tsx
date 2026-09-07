@@ -4,6 +4,14 @@ import { useEffect } from 'react'
 import { useChapterIndex } from '@/lib/useScroll'
 import { useExperience } from '@/store/experience'
 import { ACTS, CHAPTER_IDENTITY } from '@/data/chapters'
+import {
+  CodexIcon,
+  PauseIcon,
+  PlayIcon,
+  SoundOffIcon,
+  SoundOnIcon,
+  StoryIcon,
+} from './HudIcons'
 
 /**
  * The War Council HUD.
@@ -19,6 +27,13 @@ import { ACTS, CHAPTER_IDENTITY } from '@/data/chapters'
  * chapter change and at no other time. It must never subscribe to continuous
  * progress: it sits in the same tree as the canvas.
  */
+/**
+ * One control. The 36px box is the touch target; the mark inside it is 16, and
+ * the colour is left to the button so the icons inherit the ground.
+ */
+const CONTROL =
+  'flex h-9 w-9 items-center justify-center transition-colors duration-200 hover:[color:var(--fg)]'
+
 export function WarCouncilHUD() {
   const chapterIndex = useChapterIndex()
   const entered = useExperience((s) => s.entered)
@@ -112,39 +127,49 @@ export function WarCouncilHUD() {
         </div>
       </div>
 
-      {/* Controls, set on the upper bar. */}
+      {/* Controls, set on the upper bar. Marks rather than words: three labels in
+          mono caps read as a menu bar over a frame that is trying to be a film,
+          and the negative margin puts the last icon's EDGE on the inset the
+          chapter line below it is set to, not its box. */}
       <div
-        className="fixed inset-x-0 flex items-start justify-end gap-6 px-[var(--hud-inset)] pt-4"
+        className="fixed inset-x-0 flex items-start justify-end gap-1 px-[var(--hud-inset)] pt-2"
         style={{ zIndex: 'var(--z-hud)', top: 'var(--letterbox-bar)' }}
       >
-        {/* The projector. Hidden in the Codex, which is a document, not a film. */}
-        {mode === 'story' ? (
+        <div className="-mr-2.5 flex items-start gap-1">
+          {/* The projector. Hidden in the Codex, which is a document, not a film. */}
+          {mode === 'story' ? (
+            <button
+              type="button"
+              onClick={toggleAutoplay}
+              className={`${CONTROL} ${autoplay ? 't-gold' : 't-muted'}`}
+              aria-pressed={autoplay}
+              aria-label={autoplay ? 'Pause the reading' : 'Let the page read itself'}
+              title={autoplay ? 'Pause (space)' : 'Let it play (space)'}
+            >
+              {autoplay ? <PauseIcon /> : <PlayIcon />}
+            </button>
+          ) : null}
           <button
             type="button"
-            onClick={toggleAutoplay}
-            className={`font-mono text-micro uppercase tracking-[0.3em] transition-colors hover:opacity-100 hover:[color:var(--fg)] ${autoplay ? 't-gold' : 't-muted'}`}
-            aria-pressed={autoplay}
-            title={autoplay ? 'Pause (space)' : 'Let it play (space)'}
+            onClick={toggleMode}
+            className={`${CONTROL} t-muted`}
+            aria-pressed={mode === 'codex'}
+            aria-label={mode === 'story' ? 'Open the Codex' : 'Return to the story'}
+            title={mode === 'story' ? 'The Codex' : 'The story'}
           >
-            {autoplay ? 'Pause' : 'Play'}
+            {mode === 'story' ? <CodexIcon /> : <StoryIcon />}
           </button>
-        ) : null}
-        <button
-          type="button"
-          onClick={toggleMode}
-          className="font-mono text-micro uppercase tracking-[0.3em] t-muted transition-colors hover:opacity-100 hover:[color:var(--fg)]"
-          aria-pressed={mode === 'codex'}
-        >
-          {mode === 'story' ? 'Codex' : 'Story'}
-        </button>
-        <button
-          type="button"
-          onClick={() => setAudioEnabled(!audioEnabled)}
-          className="font-mono text-micro uppercase tracking-[0.3em] t-muted transition-colors hover:opacity-100 hover:[color:var(--fg)]"
-          aria-pressed={audioEnabled}
-        >
-          {audioEnabled ? 'Sound on' : 'Sound off'}
-        </button>
+          <button
+            type="button"
+            onClick={() => setAudioEnabled(!audioEnabled)}
+            className={`${CONTROL} ${audioEnabled ? 't-muted' : 't-faint'}`}
+            aria-pressed={audioEnabled}
+            aria-label={audioEnabled ? 'Sound on' : 'Sound off'}
+            title={audioEnabled ? 'Sound on' : 'Sound off'}
+          >
+            {audioEnabled ? <SoundOnIcon /> : <SoundOffIcon />}
+          </button>
+        </div>
       </div>
     </>
   )
