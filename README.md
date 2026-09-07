@@ -67,6 +67,9 @@ the tools that keep them honest:
   textures and releases everything else; decoded audio stems are capped at four resident.
 - **Nothing draws for nobody.** The loop stops in Codex Mode, behind the gate once warm, and in a
   hidden tab. There is no MSAA: every visible edge here is texture alpha, which MSAA never touched.
+- **A component subscribes to its own question.** Beats and decision nodes read a boolean about
+  themselves through `useScrollSignal` / `useDecisionSignal`, not the whole quantised snapshot, so a
+  scroll stopping or a pointer crossing an option re-renders the one component it concerns.
 
 Measure before believing any of it:
 

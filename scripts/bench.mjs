@@ -485,9 +485,9 @@ await bench(([n, frames]) => {
   }, [start, start + SCRUB_FRAMES])
   for (const k of ['cost', 'other', 'frame', 'js', 'fin']) r[k] = stats(r[k])
   r.transition.browser = perfDelta(s0, s1)
-  r.timeline = await bench(([a, b]) => window.__bench.frames.slice(a, b).map((f) => ({ y: f.y, beat: f.beat, bar: f.bar, t: Math.round(f.t), pend: Math.round(f.pendingMs) })), [start, start + SCRUB_FRAMES])
-  // fill `other` per tick from consecutive timestamps
-  r.timeline = r.timeline.map((f, i, arr) => ({ ...f, other: i + 1 < arr.length ? Math.round(Math.max(0, arr[i + 1].t - f.t - (arr[i + 1].pend ?? 0))) : 0 }))
+  r.timeline = await bench(([a, b]) => window.__bench.frames.slice(a, b).map((f) => ({ y: f.y, beat: f.beat, bar: f.bar, t: Math.round(f.t), render: Math.round(f.js + f.fin), pend: Math.round(f.pendingMs) })), [start, start + SCRUB_FRAMES])
+  // `other` per tick: the interval to the next tick minus this tick's render and the next tick's clock hold
+  r.timeline = r.timeline.map((f, i, arr) => ({ ...f, other: i + 1 < arr.length ? Math.round(Math.max(0, arr[i + 1].t - f.t - f.render - (arr[i + 1].pend ?? 0))) : 0 }))
   phases.push(r)
   const bw = r.transition.browser
   process.stdout.write(`  scrub  ch${SCRUB_CHAPTER} 0.05→0.70 over ${SCRUB_FRAMES} ticks: cost ${fmt(r.cost.med)}/${fmt(r.cost.p95)}ms  dom ${fmt(r.other.med)}/${fmt(r.other.p95)}ms (sum ${fmt(r.transition.otherMs)}, max ${fmt(r.transition.maxOther)})  worst interval ${fmt(r.transition.maxFrame)}ms${bw ? `  style ${fmt(bw.style, 0)}ms (${bw.styleCount}×) layout ${fmt(bw.layout, 0)}ms (${bw.layoutCount}×) script ${fmt(bw.script, 0)}ms` : ''}\n`)
