@@ -4,6 +4,12 @@ import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 
 export type Mode = 'story' | 'codex'
+/**
+ * Cinema crops the frame to 2.39 and puts the silk bars up. Reading opens them
+ * out, because a fixed bar over a flowing column of prose does not frame the
+ * text — it clips it, one line at a time, all the way down.
+ */
+export type FrameMode = 'cinema' | 'reading'
 export type QualityTier = 'high' | 'medium' | 'low'
 export type Decision = { option: 'a' | 'b'; at: number }
 
@@ -16,6 +22,9 @@ export type ExperienceState = {
   /** The reader has passed the enter gate and granted the first audio gesture. */
   entered: boolean
   enter: () => void
+
+  frame: FrameMode
+  setFrame: (frame: FrameMode) => void
 
   audioEnabled: boolean
   masterVolume: number
@@ -57,6 +66,9 @@ export const useExperience = create<ExperienceState>()(
 
       entered: false,
       enter: () => set({ entered: true }),
+
+      frame: 'cinema',
+      setFrame: (frame) => set({ frame }),
 
       audioEnabled: false,
       masterVolume: 0.7,

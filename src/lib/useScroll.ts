@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useSyncExternalStore } from 'react'
 import {
+  registerBeat,
   getDiscrete,
   getServerDiscrete,
   measure,
@@ -34,6 +35,17 @@ export function useSectionRef(id: string, chapter: number) {
       return off
     },
     [id, chapter],
+  )
+}
+
+/** Ref callback that registers a beat block with the scroll engine. */
+export function useBeatRef(chapter: number, index: number) {
+  return useCallback(
+    (el: HTMLElement | null) => {
+      if (!el) return
+      return registerBeat(`beat-${chapter}-${index}`, el, chapter, index)
+    },
+    [chapter, index],
   )
 }
 

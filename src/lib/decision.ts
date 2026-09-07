@@ -32,8 +32,10 @@ export type DecisionSnapshot = {
   /** Which option the pointer is over, for the preview. Null when neither. */
   hovered: DecisionOption | null
   chosen: DecisionOption | null
-  /** Seconds since the current phase began. */
+  /** Seconds since the current phase began, on wall time. */
   elapsed: number
+  /** performance.now() at the moment the current phase started. */
+  phaseStartedAt: number
   /** 0..1 through the simulating phase. */
   sim: number
 }
@@ -44,6 +46,7 @@ export const decision: DecisionSnapshot = {
   hovered: null,
   chosen: null,
   elapsed: 0,
+  phaseStartedAt: 0,
   sim: 0,
 }
 
@@ -91,10 +94,13 @@ export const PHASE_MS = {
   consequence: 2200,
 } as const
 
+const now = () => (typeof performance !== 'undefined' ? performance.now() : 0)
+
 export function setPhase(phase: DecisionPhase) {
   if (decision.phase === phase) return
   decision.phase = phase
   decision.elapsed = 0
+  decision.phaseStartedAt = now()
   if (phase === 'simulating') decision.sim = 0
   publish()
 }
@@ -104,6 +110,7 @@ export function arm(chapter: number) {
   decision.hovered = null
   decision.chosen = null
   decision.elapsed = 0
+  decision.phaseStartedAt = now()
   decision.sim = 0
   setPhase('armed')
 }
@@ -130,9 +137,18 @@ export function reset() {
   setPhase('dormant')
 }
 
-/** Advances the phase machine. Called once per frame by the node component. */
-export function tickDecision(dt: number): void {
-  decision.elapsed += dt
+/**
+ * Advances the phase machine. Called once per frame by the node component.
+ *
+ * The clock is WALL TIME, not accumulated frame deltas. Summing dt with a
+ * per-frame clamp — which the render loop needs, so a backgrounded tab does not
+ * jump the world forward — means an authored 1.2 s beat takes four seconds on a
+ * device running at 15fps, and the reader waits three times as long as anyone
+ * designed for precisely because their machine is slow. A narrative beat with a
+ * duration in it should be immune to frame rate.
+ */
+export function tickDecision(_dt: number): void {
+  decision.elapsed = (now() - decision.phaseStartedAt) / 1000
   const ms = decision.elapsed * 1000
   switch (decision.phase) {
     case 'committed':

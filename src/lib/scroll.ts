@@ -49,6 +49,14 @@ export type ScrollSnapshot = {
   chapterProgress: number
   /** Smoothed `chapterProgress`. */
   chapterSmooth: number
+  /**
+   * Which authored beat of the active chapter the reader is in.
+   *
+   * A chapter is not one held frame — it is a sequence of beats, each with its
+   * own copy, camera mark and interaction. This is the quantised signal that
+   * lets the DOM swap text blocks without touching the render loop.
+   */
+  beatIndex: number
   /** True when the reader has stopped moving. */
   atRest: boolean
   /** Set while a decision node has taken control of the page. */
@@ -66,6 +74,7 @@ export const scroll: ScrollSnapshot = {
   chapterIndex: -1,
   chapterProgress: 0,
   chapterSmooth: 0,
+  beatIndex: 0,
   atRest: true,
   locked: false,
   viewportHeight: 0,
@@ -75,15 +84,38 @@ export const scroll: ScrollSnapshot = {
 /** The quantised view. Object identity changes only when a field changes. */
 export type DiscreteScroll = {
   chapterIndex: number
+  beatIndex: number
   direction: 1 | -1
   atRest: boolean
   locked: boolean
 }
 
-let discrete: DiscreteScroll = { chapterIndex: -1, direction: 1, atRest: true, locked: false }
+let discrete: DiscreteScroll = { chapterIndex: -1, beatIndex: 0, direction: 1, atRest: true, locked: false }
 const listeners = new Set<() => void>()
 
-const SERVER_SNAPSHOT: DiscreteScroll = { chapterIndex: -1, direction: 1, atRest: true, locked: false }
+const SERVER_SNAPSHOT: DiscreteScroll = { chapterIndex: -1, beatIndex: 0, direction: 1, atRest: true, locked: false }
+
+/**
+ * Beats are measured from the DOM, not declared as fractions of the chapter.
+ *
+ * The alternative — a table of normalised progress edges per chapter — has to
+ * be retuned by hand every time a vignette gets longer or a beat gains a
+ * paragraph, and it silently desynchronises from the layout the moment anyone
+ * edits copy. Registering the actual elements means a beat lasts exactly as
+ * long as it occupies, and a longer story simply takes more scroll.
+ */
+type BeatRecord = { chapter: number; index: number; el: HTMLElement; top: number; height: number }
+const beats = new Map<string, BeatRecord>()
+let measuredBeats: BeatRecord[] = []
+
+export function registerBeat(id: string, el: HTMLElement, chapter: number, index: number): () => void {
+  beats.set(id, { chapter, index, el, top: 0, height: 0 })
+  queueMeasure()
+  return () => {
+    beats.delete(id)
+    queueMeasure()
+  }
+}
 
 export function subscribeDiscrete(fn: () => void): () => void {
   listeners.add(fn)
@@ -99,6 +131,7 @@ export function getServerDiscrete(): DiscreteScroll {
 function publishDiscrete(next: DiscreteScroll) {
   if (
     next.chapterIndex === discrete.chapterIndex &&
+    next.beatIndex === discrete.beatIndex &&
     next.direction === discrete.direction &&
     next.atRest === discrete.atRest &&
     next.locked === discrete.locked
@@ -133,8 +166,18 @@ function queueMeasure() {
   })
 }
 
-/** Reads layout once, off the scroll path. Never call this from a scroll handler. */
+/**
+ * Reads layout once, off the scroll path. Never call this from a scroll handler.
+ *
+ * Refuses to run while the page is locked. The scroll lock takes the body out of
+ * flow, which collapses the document to viewport height — so every section's
+ * measured top becomes garbage, and the ResizeObserver watching the document
+ * fires the moment the lock is taken. The symptom is subtle and total: the
+ * reader commits to a decision and the scene behind them silently jumps to the
+ * next chapter's environment while they read the verdict.
+ */
 export function measure() {
+  if (scroll.locked) return
   const out: ScrollSection[] = []
   for (const [id, { el, chapter }] of sections) {
     const rect = el.getBoundingClientRect()
@@ -142,6 +185,14 @@ export function measure() {
   }
   out.sort((a, b) => a.top - b.top)
   measured = out
+
+  const beatOut: BeatRecord[] = []
+  for (const rec of beats.values()) {
+    const r = rec.el.getBoundingClientRect()
+    beatOut.push({ ...rec, top: r.top + window.scrollY, height: r.height })
+  }
+  beatOut.sort((a, b) => a.top - b.top)
+  measuredBeats = beatOut
   scroll.viewportHeight = window.innerHeight
   scroll.documentHeight = document.documentElement.scrollHeight
 }
@@ -169,11 +220,30 @@ let restTimer = 0
 const SMOOTH_LAMBDA = 7
 const REST_EPSILON = 0.00015
 
+/**
+ * Which beat of `chapter` holds the focus line. Linear scan: a chapter has
+ * single digits of beats and only one chapter is ever resident, so this is
+ * cheaper than keeping a sorted index in step with layout.
+ */
+function resolveBeat(chapter: number, focus: number): number {
+  let beat = 0
+  for (const b of measuredBeats) {
+    if (b.chapter !== chapter) continue
+    if (focus >= b.top && focus < b.top + b.height) return b.index
+    if (focus >= b.top) beat = b.index
+  }
+  return beat
+}
+
 function frame(now: number) {
   const dt = lastTime ? Math.min((now - lastTime) / 1000, 1 / 15) : 1 / 60
   lastTime = now
 
-  const y = window.scrollY
+  // While the page is locked the body is out of flow at a negative offset, so
+  // window.scrollY reads 0 — which would drive the camera, the chapter index
+  // and the audio all the way back to the top of the document for the duration
+  // of every decision node. Hold the position the lock was taken at instead.
+  const y = scroll.locked ? lockedScrollY : window.scrollY
   const max = Math.max(1, document.documentElement.scrollHeight - window.innerHeight)
   const progress = Math.min(1, Math.max(0, y / max))
 
@@ -203,6 +273,9 @@ function frame(now: number) {
   }
   scroll.chapterIndex = chapterIndex
   scroll.chapterProgress = chapterProgress
+
+  const beat = resolveBeat(chapterIndex, focus)
+  scroll.beatIndex = beat
   scroll.chapterSmooth = damp(scroll.chapterSmooth, chapterProgress, SMOOTH_LAMBDA, dt)
 
   const atRest = restTimer > 0.12
@@ -210,6 +283,7 @@ function frame(now: number) {
 
   publishDiscrete({
     chapterIndex,
+    beatIndex: beat,
     direction: scroll.direction,
     atRest,
     locked: scroll.locked,
