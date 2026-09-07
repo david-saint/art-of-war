@@ -77,6 +77,12 @@ if (S_A && S_B) {
   out(`| Scrolling through a chapter, worst frame interval (ms) | ${delta(S_A.transition.maxFrame, S_B.transition.maxFrame)} |`)
   out(`| Scrolling through a chapter, render cost per tick (ms) | ${delta(S_A.cost.med, S_B.cost.med)} |`)
 }
+if (S_A?.transition.browser && S_B?.transition.browser) {
+  const a = S_A.transition.browser, b = S_B.transition.browser
+  out(`| Scrolling through a chapter, style recalc (ms, count) | ${f(a.style, 0)} (${a.styleCount}×) → ${f(b.style, 0)} (${b.styleCount}×) |`)
+  out(`| Scrolling through a chapter, layout (ms, count) | ${f(a.layout, 0)} (${a.layoutCount}×) → ${f(b.layout, 0)} (${b.layoutCount}×) |`)
+  out(`| Scrolling through a chapter, script (ms) | ${delta(a.script, b.script, true, 0)} |`)
+}
 const sumOther = (r) => r.phases.filter((p) => /^ch/.test(p.name)).reduce((s, p) => s + (p.transition.otherMs ?? 0), 0)
 const maxOther = (r) => Math.max(...r.phases.filter((p) => /^ch/.test(p.name)).map((p) => p.transition.maxOther ?? 0))
 out(`| Arriving at each chapter, total across thirteen (ms) | ${delta(sumOther(A), sumOther(B), true, 0)} |`)

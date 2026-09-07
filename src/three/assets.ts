@@ -13,8 +13,8 @@ import type { TextureSpec } from './textures'
 
 const IMG = '/assets/generated/img'
 
-/** A painted plate or silhouette: sRGB, anisotropic, mip chain built off-thread. */
-export const plate = (url: string): TextureSpec => ({ url, kind: 'art', anisotropy: 4, mips: 'chain' })
+/** A painted plate or silhouette: sRGB, anisotropic. */
+export const plate = (url: string): TextureSpec => ({ url, kind: 'art', anisotropy: 4 })
 /** Calligraphy or a seal, sampled by the ink dissolve. */
 export const glyph = (url: string): TextureSpec => ({ url, kind: 'art' })
 /** A sprite or mask read as data. */

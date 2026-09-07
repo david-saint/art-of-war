@@ -119,6 +119,11 @@ const PROBE = String.raw`(() => {
       if (sc.i <= sc.n) { window.scrollTo(0, sc.y0 + (sc.y1 - sc.y0) * (sc.i / sc.n)); sc.i++ } else S.scrub = null
     }
     const rec = { v: vnow, t: realNow(), phase: S.phase, draws: 0, links: 0, shaderMs: 0, uploads: 0, uploadBytes: 0, uploadMs: 0, mips: 0, js: 0, fin: 0, pendingMs: S.pendingMs }
+    if (S.scrub || S.phase === 'scrub') {
+      rec.y = Math.round(window.scrollY)
+      rec.bar = document.documentElement.style.getPropertyValue('--letterbox-bar')
+      rec.beat = S.beatOf ? S.beatOf() : undefined
+    }
     S.pendingMs = 0
     S.frames.push(rec)
 
@@ -302,6 +307,14 @@ async function open(seeded) {
 
 let { context, page } = await open(false)
 
+let perfSession = null
+const perfMetrics = async () => {
+  if (!perfSession) return null
+  const { metrics } = await perfSession.send('Performance.getMetrics')
+  const m = Object.fromEntries(metrics.map((x) => [x.name, x.value]))
+  return { style: m.RecalcStyleDuration * 1000, layout: m.LayoutDuration * 1000, script: m.ScriptDuration * 1000, task: m.TaskDuration * 1000, styleCount: m.RecalcStyleCount, layoutCount: m.LayoutCount, nodes: m.Nodes, layers: m.LayoutObjects }
+}
+const perfDelta = (a, b) => (a && b ? { style: b.style - a.style, layout: b.layout - a.layout, script: b.script - a.script, task: b.task - a.task, styleCount: b.styleCount - a.styleCount, layoutCount: b.layoutCount - a.layoutCount, nodes: b.nodes } : null)
 const bench = (fn, arg) => page.evaluate(fn, arg)
 const setPhase = (phase) => bench((p) => { window.__bench.phase = p }, phase)
 const frameCount = () => bench(() => window.__bench.frames.length)
@@ -359,6 +372,8 @@ await context.close()
 
 // B. The deterministic visit.
 ;({ context, page } = await open(true))
+perfSession = await context.newCDPSession(page)
+await perfSession.send('Performance.enable', { timeDomain: 'timeTicks' })
 await page.goto(url, { waitUntil: 'domcontentloaded' })
 await page.waitForFunction(() => !!window.__bench.gl, null, { timeout: 60000 })
 
@@ -366,9 +381,12 @@ await page.waitForFunction(() => !!window.__bench.gl, null, { timeout: 60000 })
 const phases = []
 async function measure(name, transitionFrames) {
   const transStart = await frameCount()
+  const m0 = await perfMetrics()
   await waitFrames(transitionFrames)
   const steadyStart = await frameCount()
+  const m1 = await perfMetrics()
   await waitFrames(STEADY_FRAMES)
+  const m2 = await perfMetrics()
   const r = await bench(([name, a, b, c]) => {
     const B = window.__bench
     const trans = B.frames.slice(a, b)
@@ -388,15 +406,16 @@ async function measure(name, transitionFrames) {
       frame: steady.slice(1).map((f, i) => f.t - steady[i].t),
       cost: steady.map((f) => f.js + f.fin),
       // Main thread between one frame and the next that is not the render
-      // loop: React commits, style, layout, paint. The DOM's cost.
-      other: steady.slice(1).map((f, i) => Math.max(0, f.t - steady[i].t - steady[i].js - steady[i].fin)),
+      // loop and not a clock hold for an async load: React commits, style,
+      // layout, paint. The DOM's cost.
+      other: steady.slice(1).map((f, i) => Math.max(0, f.t - steady[i].t - steady[i].js - steady[i].fin - f.pendingMs)),
       js: steady.map((f) => f.js),
       fin: steady.map((f) => f.fin),
       transition: {
         maxJs: Math.max(...trans.map((f) => f.js)),
         maxFrame: Math.max(...trans.slice(1).map((f, i) => f.t - trans[i].t)),
-        otherMs: trans.slice(1).reduce((s, f, i) => s + Math.max(0, f.t - trans[i].t - trans[i].js - trans[i].fin), 0),
-        maxOther: Math.max(...trans.slice(1).map((f, i) => Math.max(0, f.t - trans[i].t - trans[i].js - trans[i].fin))),
+        otherMs: trans.slice(1).reduce((s, f, i) => s + Math.max(0, f.t - trans[i].t - trans[i].js - trans[i].fin - f.pendingMs), 0),
+        maxOther: Math.max(...trans.slice(1).map((f, i) => Math.max(0, f.t - trans[i].t - trans[i].js - trans[i].fin - f.pendingMs))),
         links: trans.reduce((s, f) => s + f.links, 0),
         shaderMs: trans.reduce((s, f) => s + f.shaderMs, 0),
         uploads: trans.reduce((s, f) => s + f.uploads, 0),
@@ -415,10 +434,13 @@ async function measure(name, transitionFrames) {
   r.cost = stats(r.cost)
   r.other = stats(r.other)
   r.js = stats(r.js)
+  r.transition.browser = perfDelta(m0, m1)
+  r.browser = perfDelta(m1, m2)
   r.fin = stats(r.fin)
   phases.push(r)
   const tr = r.transition
-  process.stdout.write(`  ${name.padEnd(6)} cost ${fmt(r.cost.med)}/${fmt(r.cost.p95)}ms (js ${fmt(r.js.med)} gpu ${fmt(r.fin.med)} dom ${fmt(r.other.med)})  draws ${r.steadyDraws}  | swap: maxJs ${fmt(tr.maxJs)}ms dom ${fmt(tr.otherMs)}ms (max ${fmt(tr.maxOther)}) links ${tr.links} (${fmt(tr.shaderMs)}ms) uploads ${tr.uploads} (${tr.uploadMB.toFixed(1)}MB, ${fmt(tr.uploadMs)}ms) gap ${fmt(tr.gapMs)}ms  | tex ${r.texMB.toFixed(0)}MB\n`)
+    const bw = tr.browser ? ` style ${fmt(tr.browser.style, 0)}/layout ${fmt(tr.browser.layout, 0)}/script ${fmt(tr.browser.script, 0)}ms` : ''
+  process.stdout.write(`  ${name.padEnd(6)} cost ${fmt(r.cost.med)}/${fmt(r.cost.p95)}ms (js ${fmt(r.js.med)} gpu ${fmt(r.fin.med)} dom ${fmt(r.other.med)})  draws ${r.steadyDraws}  | swap: maxJs ${fmt(tr.maxJs)}ms dom ${fmt(tr.otherMs)}ms (max ${fmt(tr.maxOther)})${bw} links ${tr.links} (${fmt(tr.shaderMs)}ms) uploads ${tr.uploads} (${tr.uploadMB.toFixed(1)}MB, ${fmt(tr.uploadMs)}ms) gap ${fmt(tr.gapMs)}ms  | tex ${r.texMB.toFixed(0)}MB\n`)
   return r
 }
 function fmt(x) { return x == null ? '–' : x.toFixed(1) }
@@ -427,21 +449,20 @@ await setPhase('hero')
 await measure('hero', 60)
 await shot('hero')
 
-// 3. Every chapter, in reading order, so each transition is the real one.
-for (const n of CHAPTERS) {
-  const name = `ch${n}`
-  await setPhase(name)
-  await scrollToChapter(n)
-  await measure(name, SETTLE_FRAMES)
-  await shot(name)
-}
-
-// 4. Scroll through a chapter's beats, a step per tick, and measure the whole
-//    main thread while the page's copy hands off underneath the reader.
+// Scroll through a chapter's beats, a step per tick, and measure the whole
+// main thread while the page's copy hands off underneath the reader. Runs
+// right after that chapter's own measurement, so the window holds a
+// scroll-through and nothing else — no swap, no texture loads.
 const SCRUB_CHAPTER = Number(process.env.BENCH_SCRUB ?? 3)
 const SCRUB_FRAMES = 240
+async function scrub() {
 await setPhase('scrub')
 await bench(([n, frames]) => {
+  window.__bench.beatOf = () => {
+    const sec = document.getElementById(`chapter-${n}`)
+    if (!sec) return -1
+    return [...sec.children].filter((c) => c.tagName === 'DIV').findIndex((d) => d.firstElementChild && (d.firstElementChild.style.opacity === '1'))
+  }
   const el = document.getElementById(`chapter-${n}`)
   const top = el.getBoundingClientRect().top + window.scrollY
   const h = el.offsetHeight
@@ -451,21 +472,41 @@ await bench(([n, frames]) => {
 }, [SCRUB_CHAPTER, SCRUB_FRAMES])
 {
   const start = await frameCount()
+  const s0 = await perfMetrics()
   await waitFrames(SCRUB_FRAMES + 2)
+  const s1 = await perfMetrics()
   const r = await bench(([a, b]) => {
     const fs = window.__bench.frames.slice(a, b)
-    const other = fs.slice(1).map((f, i) => Math.max(0, f.t - fs[i].t - fs[i].js - fs[i].fin))
+    const other = fs.slice(1).map((f, i) => Math.max(0, f.t - fs[i].t - fs[i].js - fs[i].fin - f.pendingMs))
     const interval = fs.slice(1).map((f, i) => f.t - fs[i].t)
     return { name: 'scrub', steadyDraws: 0, cost: fs.map((f) => f.js + f.fin), other, frame: interval, js: fs.map((f) => f.js), fin: fs.map((f) => f.fin),
       transition: { maxJs: Math.max(...fs.map((f) => f.js)), maxFrame: Math.max(...interval), otherMs: other.reduce((s, x) => s + x, 0), maxOther: Math.max(...other), links: 0, shaderMs: 0, uploads: fs.reduce((s, f) => s + f.uploads, 0), uploadMB: 0, uploadMs: fs.reduce((s, f) => s + f.uploadMs, 0), mips: 0, pendingMs: 0, gapMs: 0, longTasks: 0 },
       texMB: window.__bench.texBytes / 1048576, heapMB: performance.memory ? performance.memory.usedJSHeapSize / 1048576 : null }
   }, [start, start + SCRUB_FRAMES])
   for (const k of ['cost', 'other', 'frame', 'js', 'fin']) r[k] = stats(r[k])
+  r.transition.browser = perfDelta(s0, s1)
+  r.timeline = await bench(([a, b]) => window.__bench.frames.slice(a, b).map((f) => ({ y: f.y, beat: f.beat, bar: f.bar, t: Math.round(f.t), pend: Math.round(f.pendingMs) })), [start, start + SCRUB_FRAMES])
+  // fill `other` per tick from consecutive timestamps
+  r.timeline = r.timeline.map((f, i, arr) => ({ ...f, other: i + 1 < arr.length ? Math.round(Math.max(0, arr[i + 1].t - f.t - (arr[i + 1].pend ?? 0))) : 0 }))
   phases.push(r)
-  process.stdout.write(`  scrub  ch${SCRUB_CHAPTER} 0.05→0.70 over ${SCRUB_FRAMES} ticks: cost ${fmt(r.cost.med)}/${fmt(r.cost.p95)}ms  dom ${fmt(r.other.med)}/${fmt(r.other.p95)}ms (sum ${fmt(r.transition.otherMs)}, max ${fmt(r.transition.maxOther)})  worst interval ${fmt(r.transition.maxFrame)}ms\n`)
+  const bw = r.transition.browser
+  process.stdout.write(`  scrub  ch${SCRUB_CHAPTER} 0.05→0.70 over ${SCRUB_FRAMES} ticks: cost ${fmt(r.cost.med)}/${fmt(r.cost.p95)}ms  dom ${fmt(r.other.med)}/${fmt(r.other.p95)}ms (sum ${fmt(r.transition.otherMs)}, max ${fmt(r.transition.maxOther)})  worst interval ${fmt(r.transition.maxFrame)}ms${bw ? `  style ${fmt(bw.style, 0)}ms (${bw.styleCount}×) layout ${fmt(bw.layout, 0)}ms (${bw.layoutCount}×) script ${fmt(bw.script, 0)}ms` : ''}\n`)
+  const spikes = r.timeline.map((f, i) => ({ i, ...f })).filter((f) => f.other > 25)
+  if (spikes.length) process.stdout.write(`         spikes: ${spikes.map((f) => `#${f.i} ${f.other}ms y=${f.y} beat=${f.beat} bar=${f.bar}`).join(' · ')}\n`)
+}
 }
 
-// 5. Codex Mode: the canvas is behind a blurred scrim.
+// 3. Every chapter, in reading order, so each transition is the real one.
+for (const n of CHAPTERS) {
+  const name = `ch${n}`
+  await setPhase(name)
+  await scrollToChapter(n)
+  await measure(name, SETTLE_FRAMES)
+  await shot(name)
+  if (n === SCRUB_CHAPTER) await scrub()
+}
+
+// 4. Codex Mode: the canvas is behind a blurred scrim.
 await setPhase('codex')
 await page.click('button:has-text("Codex")')
 await measure('codex', 60)
@@ -474,7 +515,7 @@ await page.keyboard.press('Escape')
 await setPhase('story')
 await measure('story', 60)
 
-// 6. Resources.
+// 5. Resources.
 const resourceList = await bench(() => performance.getEntriesByType('resource').map((e) => ({ name: e.name.replace(location.origin, ''), initiator: e.initiatorType, kb: Math.round(e.transferSize / 1024), t: Math.round(e.startTime) })))
 const resources = await bench(() => {
   const groups = {}

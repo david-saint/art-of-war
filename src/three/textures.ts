@@ -49,11 +49,11 @@ export type TextureSpec = {
   /** Anisotropic filtering level; 'tier' resolves against the quality profile at load time. */
   anisotropy?: number | 'tier'
   /**
-   * Build the mipmap chain at decode time, on a worker, instead of asking the
-   * driver for it at upload. generateMipmap on a 3168×1344 plate is ~35ms of
-   * main thread on Apple silicon; twelve resized bitmaps uploaded in turn are
-   * a few. Each level is the previous one halved with a bilinear filter, which
-   * is the same 2×2 box the driver would have used.
+   * Build the mipmap chain at decode time instead of asking the driver for it
+   * at upload. Not used by default: createImageBitmap's resize turned out to
+   * run on the main thread in Chrome (~50ms for a plate's twelve levels), and
+   * once artwork went through texImage2D the driver's generateMipmap was
+   * cheap. Kept for platforms where that trade goes the other way.
    */
   mips?: 'chain'
 }
