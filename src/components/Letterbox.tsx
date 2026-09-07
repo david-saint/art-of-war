@@ -17,21 +17,21 @@ import { useExperience } from '@/store/experience'
  */
 export function Letterbox({ active = true }: { active?: boolean }) {
   const mode = useExperience((s) => s.mode)
+  const frame = useExperience((s) => s.frame)
 
   useEffect(() => {
     const apply = () => {
-      // Codex Mode hands the full page back: the reader is here to look things
-      // up, and a cinema crop on a reference table is an affectation.
-      const cinema = active && mode === 'story'
-      const bar = cinema
-        ? Math.max(0, (window.innerHeight - window.innerWidth / 2.39) / 2)
-        : 0
+      // Codex and reading beats both hand the page back — a cinema crop over a
+      // column of prose clips it a line at a time. Reading keeps a thin margin.
+      const cinema = active && mode === 'story' && frame === 'cinema'
+      const full = Math.max(0, (window.innerHeight - window.innerWidth / 2.39) / 2)
+      const bar = cinema ? full : mode === 'story' ? Math.min(full, 28) : 0
       document.documentElement.style.setProperty('--letterbox-bar', `${Math.round(bar)}px`)
     }
     apply()
     window.addEventListener('resize', apply)
     return () => window.removeEventListener('resize', apply)
-  }, [active, mode])
+  }, [active, mode, frame])
 
   return (
     <>

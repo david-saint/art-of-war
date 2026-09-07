@@ -77,15 +77,22 @@ export function DecisionNode({ chapter, data, at = 0.62 }: DecisionNodeProps) {
     return () => cancelAnimationFrame(raf)
   }, [chapter, at, alreadyResolved])
 
-  // Phase clock and scroll lock.
+  // Take the frame the moment this node is armed.
+  useEffect(() => {
+    if (!active || snap.phase !== 'armed') return
+    releaseRef.current = lockScroll()
+    setPhase('presented')
+  }, [active, snap.phase])
+
+  // The phase clock.
+  //
+  // This deliberately does NOT depend on snap.phase. An earlier version did,
+  // which meant every phase transition tore down the rAF loop and started a new
+  // one — and because the teardown ran in the same commit that set the next
+  // phase, the machine could stall between states and never reach the verdict.
+  // One loop, mounted for as long as this node is active, advances everything.
   useEffect(() => {
     if (!active) return
-
-    if (snap.phase === 'armed') {
-      releaseRef.current = lockScroll()
-      setPhase('presented')
-    }
-
     let last = performance.now()
     const tick = (now: number) => {
       rafRef.current = requestAnimationFrame(tick)
@@ -94,11 +101,8 @@ export function DecisionNode({ chapter, data, at = 0.62 }: DecisionNodeProps) {
       tickDecision(dt)
     }
     rafRef.current = requestAnimationFrame(tick)
-
-    return () => {
-      cancelAnimationFrame(rafRef.current)
-    }
-  }, [active, snap.phase])
+    return () => cancelAnimationFrame(rafRef.current)
+  }, [active])
 
   // Always release the lock, including on unmount mid-node.
   useEffect(
@@ -157,18 +161,30 @@ export function DecisionNode({ chapter, data, at = 0.62 }: DecisionNodeProps) {
       }}
       role="group"
       aria-label={`Chapter ${chapter} tactical decision`}
+      data-phase={snap.phase}
     >
+      {/* The node owns the frame while it is up. Without a ground of its own the
+          Commander's copy sits on whatever the plate happens to be doing, which
+          on a bright chapter is nothing at all. */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            'radial-gradient(120% 90% at 50% 78%, var(--scrim) 0%, var(--scrim) 46%, transparent 100%)',
+        }}
+      />
       {showSituation ? (
-        <p
-          className="mb-10 max-w-2xl text-center font-serif text-lead leading-relaxed t-fg"
-          aria-live="polite"
-        >
-          {data.situation}
-        </p>
+        <div className="relative mb-10 max-w-2xl text-center">
+          <p className="font-mono text-micro uppercase tracking-[0.42em] t-gold">將 · the commander</p>
+          <p className="mt-5 font-serif text-lead leading-relaxed t-fg" aria-live="polite">
+            {data.situation}
+          </p>
+        </div>
       ) : null}
 
       {showOptions ? (
-        <div className="grid w-full max-w-4xl gap-3 sm:grid-cols-2">
+        <div className="relative grid w-full max-w-4xl gap-3 sm:grid-cols-2">
           {(['a', 'b'] as const).map((key) => (
             <button
               key={key}
@@ -196,13 +212,13 @@ export function DecisionNode({ chapter, data, at = 0.62 }: DecisionNodeProps) {
       ) : null}
 
       {snap.phase === 'committed' ? (
-        <p className="font-mono text-micro uppercase tracking-[0.42em] t-faint">
+        <p className="relative font-mono text-micro uppercase tracking-[0.42em] t-faint">
           The order is given
         </p>
       ) : null}
 
       {showVerdict && chosen ? (
-        <div className="w-full max-w-3xl" aria-live="polite">
+        <div className="relative w-full max-w-3xl" aria-live="polite">
           <p className="font-mono text-micro uppercase tracking-[0.42em] t-gold">
             You chose {chosen === 'a' ? '甲' : '乙'} · {data.options[chosen].label}
           </p>
@@ -224,6 +240,54 @@ export function DecisionNode({ chapter, data, at = 0.62 }: DecisionNodeProps) {
           </button>
         </div>
       ) : null}
+    </div>
+  )
+}
+
+/**
+ * What sits in the decision beat when the node overlay is not up.
+ *
+ * Before the reader commits, this is a mark and nothing else — the situation
+ * copy belongs to the Commander at the node, and printing it here as well makes
+ * the page look like it rendered twice. After they commit it becomes the
+ * record: their branch, its cost, and Sun Tzu's line, so a returning reader can
+ * re-read the decision they can no longer retake.
+ */
+export function DecisionRecord({ chapter, data }: { chapter: number; data: DecisionData }) {
+  const stored = useExperience((s) => s.decisions[chapter])
+
+  if (!stored) {
+    return (
+      <div className="max-w-3xl">
+        <p className="font-mono text-micro uppercase tracking-[0.42em] t-gold">
+          {String(chapter).padStart(2, '0')} · 決 · a decision
+        </p>
+        <p className="mt-8 font-serif text-dictum leading-[1.15] t-fg">
+          The count is closed.
+        </p>
+        <p className="mt-6 max-w-md font-mono text-micro uppercase leading-relaxed tracking-[0.3em] t-faint">
+          Keep scrolling. It will not wait, and it will not come back.
+        </p>
+      </div>
+    )
+  }
+
+  const option = data.options[stored.option]
+  return (
+    <div className="max-w-3xl">
+      <p className="font-mono text-micro uppercase tracking-[0.42em] t-gold">
+        {String(chapter).padStart(2, '0')} · you chose {stored.option === 'a' ? '甲' : '乙'}
+      </p>
+      <p className="mt-7 font-serif text-lead leading-snug t-fg">{option.label}</p>
+      <p className="mt-6 max-w-xl font-serif text-body leading-relaxed t-muted">
+        {data.verdict[stored.option]}
+      </p>
+      <p
+        className="mt-6 max-w-xl border-l pl-5 font-serif text-body italic leading-relaxed t-muted"
+        style={{ borderColor: 'var(--color-vermilion-700)' }}
+      >
+        {data.verdict.sunzi}
+      </p>
     </div>
   )
 }

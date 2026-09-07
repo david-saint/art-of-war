@@ -98,6 +98,27 @@ docs/_research/         the source research the bible was written from
 scripts/                asset generation, the screenshot harness and the benchmark
 ```
 
+## How a chapter reads
+
+Each chapter is **six beats**, and the beat boundaries are measured from the DOM rather than
+declared as fractions, so a longer vignette simply takes more scroll:
+
+| Beat | Holds? | What it is |
+|---|---|---|
+| 0 | sticky | The dictum, plus the chapter's opening line in traditional characters |
+| 1 | sticky | The reading — what the chapter argues, and where the popular reading is wrong |
+| 2 | sticky | Two more key lines with pinyin, literal and modern renderings |
+| 3 | **flows** | The historical vignette, 700–900 words. The letterbox retracts: you are reading, not watching |
+| 4 | sticky | The Tactic Decision Node. Scroll locks until you commit; the verdict is illegal until the ink dries |
+| 5 | sticky | What the chapter is for |
+
+Verify any of it without hand-driving a browser:
+
+```bash
+node scripts/beatwalk.mjs 6     # screenshots every beat of a chapter → .shots/beats/
+node scripts/nodetest.mjs       # drives a decision node end to end and asserts the lock
+```
+
 ## Two rules the code is built around
 
 **Continuous scroll values never enter React state.** `src/lib/scroll.ts` keeps a mutable snapshot read

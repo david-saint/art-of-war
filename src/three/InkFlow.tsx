@@ -89,8 +89,14 @@ export function InkFlow({
     const options: THREE.RenderTargetOptions = {
       type,
       format: THREE.RGBAFormat,
-      minFilter: THREE.NearestFilter,
-      magFilter: THREE.NearestFilter,
+      // Linear, not nearest. The simulation samples at exact texel offsets
+      // (vUv ± uTexel on a full-screen quad), where a linear fetch returns the
+      // texel value exactly — so the solver is unaffected. The DISPLAY pass
+      // magnifies this 512² field across a 24-unit plane, and under nearest
+      // filtering a nearly-horizontal density isoline snaps to a texel row and
+      // renders as a hard straight seam through the middle of the pool.
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
       depthBuffer: false,
       stencilBuffer: false,
       generateMipmaps: false,
