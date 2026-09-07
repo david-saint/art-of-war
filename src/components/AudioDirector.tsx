@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useChapterIndex } from '@/lib/useScroll'
 import { useExperience } from '@/store/experience'
 import { getAudioEngine } from '@/lib/audio'
@@ -41,28 +41,53 @@ export function AudioDirector() {
   const masterVolume = useExperience((s) => s.masterVolume)
   const entered = useExperience((s) => s.entered)
   const lastChapter = useRef<number | null>(null)
+  const [unlocked, setUnlocked] = useState(false)
 
+  // Unlocking is not a single act. `entered` is restored from a previous visit,
+  // so a reader who has been here before skips the gate entirely and this runs
+  // with no gesture behind it: the context comes up suspended, and a resume()
+  // the autoplay policy has refused returns a promise that simply never
+  // settles. So the attempt is repeated on the next real gesture, and what the
+  // context REPORTS — not what the promise did — is what marks it unlocked.
   useEffect(() => {
     const engine = getAudioEngine()
     if (!entered || !audioEnabled) {
       engine.suspend()
+      setUnlocked(false)
       return
     }
+
     let cancelled = false
-    void (async () => {
-      await engine.unlock()
-      if (cancelled) return
+    const GESTURES = ['pointerdown', 'keydown', 'touchstart'] as const
+
+    const detach = () => {
+      for (const type of GESTURES) window.removeEventListener(type, attempt)
+    }
+
+    const settle = () => {
+      if (cancelled || !engine.unlocked) return
       engine.setVolume(masterVolume)
-    })()
+      setUnlocked(true)
+      detach()
+    }
+
+    const attempt = () => {
+      void engine.unlock().then(settle, () => {})
+      settle()
+    }
+
+    attempt()
+    for (const type of GESTURES) window.addEventListener(type, attempt, { passive: true })
+
     return () => {
       cancelled = true
+      detach()
     }
   }, [entered, audioEnabled, masterVolume])
 
   useEffect(() => {
-    if (!entered || !audioEnabled) return
+    if (!entered || !audioEnabled || !unlocked) return
     const engine = getAudioEngine()
-    if (!engine.unlocked) return
 
     const identity = CHAPTER_IDENTITY.find((c) => c.n === chapterIndex)
     const bed =
@@ -79,7 +104,7 @@ export function AudioDirector() {
       engine.hit({ gain: 0.75 })
     }
     lastChapter.current = chapterIndex
-  }, [chapterIndex, entered, audioEnabled])
+  }, [chapterIndex, entered, audioEnabled, unlocked])
 
   // Silence when the tab is not in front. A site that keeps playing drums in a
   // background tab is a site people close.
