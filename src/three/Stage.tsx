@@ -114,10 +114,11 @@ function Post() {
   const reduced = useExperience((s) => s.reducedMotion)
   const p = PROFILES[tier]
 
-  // Pass order is not cosmetic. Depth of field must run on the raw beauty pass
-  // before anything additive, or bloom bleeds across the focal plane and the
-  // whole frame goes soft. Grain and vignette come last so they sit on the
-  // finished image the way they would on a print.
+  // Pass order is not cosmetic. Depth of field, when a tier enables it, must
+  // run on the raw beauty pass before anything additive, or bloom bleeds
+  // across the focal plane and the whole frame goes soft. Grain and vignette
+  // come last so they sit on the finished image the way they would on a print.
+  // (No tier enables depth of field today; see PROFILES.high in quality.ts.)
   //
   // No multisampling. MSAA resolves the edges of GEOMETRY, and nothing in this
   // project has a geometric edge in frame: every plate covers the frame, the

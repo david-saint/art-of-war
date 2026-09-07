@@ -11,7 +11,7 @@ import { AudioDirector } from './AudioDirector'
 import { CodexView } from './CodexView'
 import { useScrollEngine } from '@/lib/useScroll'
 import { useExperience } from '@/store/experience'
-import { hasWebGL, probeQuality } from '@/three/quality'
+import { hasWebGL, pinnedQuality, probeQuality } from '@/three/quality'
 import { CHAPTER_IDENTITY } from '@/data/chapters'
 import { chapterTrack, heroTrack, mapDescentTrack } from '@/three/tracks'
 import { HERO_URLS, sceneAssets } from '@/three/assets'
@@ -57,17 +57,26 @@ export function ExperienceRoot() {
   // browser fetches the plate twice.
   for (const url of HERO_URLS) preload(url, { as: 'fetch', crossOrigin: 'anonymous', fetchPriority: 'low' })
   const setQuality = useExperience((s) => s.setQuality)
+  const setAutoQuality = useExperience((s) => s.setAutoQuality)
   const setReducedMotion = useExperience((s) => s.setReducedMotion)
 
   useEffect(() => {
     setWebgl(hasWebGL())
-    setQuality(probeQuality())
+    const pinned = pinnedQuality()
+    if (pinned) {
+      setQuality(pinned)
+      setAutoQuality(false)
+      // eslint-disable-next-line no-console
+      console.info(`[quality] pinned to ${pinned} by ?quality=; the watchdog is off`)
+    } else {
+      setQuality(probeQuality())
+    }
     const mq = window.matchMedia('(prefers-reduced-motion: reduce)')
     const apply = () => setReducedMotion(mq.matches)
     apply()
     mq.addEventListener('change', apply)
     return () => mq.removeEventListener('change', apply)
-  }, [setQuality, setReducedMotion])
+  }, [setQuality, setAutoQuality, setReducedMotion])
 
   const scenes = useMemo(
     () => [

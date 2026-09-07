@@ -23,7 +23,13 @@ export const PROFILES: Record<QualityTier, QualityProfile> = {
     particleScale: 1,
     shadows: true,
     bloom: true,
-    depthOfField: true,
+    // Off until something writes depth. Every material in the scene has depth
+    // writes disabled (the layering is by render order), so the depth buffer
+    // the effect reads is empty and its circle of confusion sits at maximum
+    // across the whole frame: not a focal plane, a global soft-focus over the
+    // plates, the glyph and the seal. The tier used to be too expensive for
+    // most machines to stay on, which is why the blur went unseen.
+    depthOfField: false,
     grain: true,
     volumetricSteps: 48,
     anisotropy: 8,
@@ -94,6 +100,18 @@ export function probeQuality(): QualityTier {
   if (score >= 6) return 'high'
   if (score >= 3) return 'medium'
   return 'low'
+}
+
+/**
+ * `?quality=high|medium|low` pins the tier and turns the watchdog off, so two
+ * machines — or two deploys — can be compared at the same tier instead of at
+ * whatever each one settled on. Anything else, including no parameter, leaves
+ * the probe and the watchdog in charge.
+ */
+export function pinnedQuality(): QualityTier | null {
+  if (typeof window === 'undefined') return null
+  const q = new URLSearchParams(window.location.search).get('quality')
+  return q === 'high' || q === 'medium' || q === 'low' ? q : null
 }
 
 export function hasWebGL(): boolean {
