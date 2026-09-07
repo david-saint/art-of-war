@@ -102,11 +102,9 @@ export function Beat({
           pointerEvents: active ? 'auto' : 'none',
         }}
       >
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0"
-          style={{ background: 'linear-gradient(100deg, var(--scrim) 0%, var(--scrim) 46%, transparent 72%)' }}
-        />
+        {/* No scrim of its own: the ground under the copy is the fixed
+            FrameScrim, which has no box and therefore no edge to show when
+            this container is lit before it has pinned. */}
         <div className="relative mx-auto w-full max-w-6xl px-[var(--hud-inset)]">{children}</div>
       </div>
     </div>
@@ -137,8 +135,10 @@ function FlowBeat({
     return () => setFrame('cinema')
   }, [reading, setFrame])
 
+  // Prose is walked more slowly than a held frame under autoplay: the column
+  // carries most of the chapter's words in a fraction of its scroll.
   return (
-    <div ref={beatRef} className="relative">
+    <div ref={beatRef} className="relative" data-autoplay-pace="0.8">
       {children}
     </div>
   )
@@ -224,11 +224,6 @@ export function Vignette({ data }: { data: VignetteData }) {
   const paragraphs = data.body.split(/\n{2,}/).filter((p) => p.trim().length > 0)
   return (
     <div className="relative py-[18vh]">
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-0"
-        style={{ background: 'linear-gradient(180deg, transparent, var(--scrim) 12%, var(--scrim) 88%, transparent)' }}
-      />
       <div className="relative mx-auto w-full max-w-6xl px-[var(--hud-inset)]">
         <div className="max-w-[62ch]">
           <p className="font-mono text-micro uppercase tracking-[0.42em] t-gold">The record</p>

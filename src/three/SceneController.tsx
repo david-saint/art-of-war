@@ -37,32 +37,67 @@ export type SceneDefinition = {
  * flat across thirteen chapters instead of climbing to half a gigabyte.
  */
 
-type Phase = 'idle' | 'covering' | 'swapping'
-
 export type SceneControllerProps = {
   scenes: SceneDefinition[]
-  /** Reports 0..1 cover opacity so the DOM transition can stay in step. */
+  /**
+   * Reports the cover the DOM wash should be at, 1 or 0. Called on chapter
+   * boundaries only, never per frame, and safe to route straight to a DOM
+   * attribute so nothing above the <Canvas> re-renders.
+   */
   onCoverChange?: (cover: number) => void
+  /**
+   * Authored length of the wash, in milliseconds: the cover goes up over the
+   * first 55% and the swap happens under it; the clear begins at the end.
+   */
   coverMs?: number
+  /**
+   * Longest the wash will hold at full cover waiting for the incoming
+   * chapter's textures. The bible allows the middle of the wash to stretch to
+   * about four seconds without reading as a wait, because it is ink doing what
+   * ink does; past that the chapter is shown with whatever has arrived.
+   */
+  maxHoldMs?: number
 }
 
-export function SceneController({ scenes, onCoverChange, coverMs = 900 }: SceneControllerProps) {
+/** A chapter boundary in flight. One at a time; a newer boundary replaces it. */
+type Ritual = { timers: number[]; swapped: boolean; cancelled: boolean }
+
+export function SceneController({
+  scenes,
+  onCoverChange,
+  coverMs = 1100,
+  maxHoldMs = 3500,
+}: SceneControllerProps) {
   const chapterIndex = useChapterIndex()
   const reduced = useExperience((s) => s.reducedMotion)
   const [active, setActive] = useState(chapterIndex)
-  const phase = useRef<Phase>('idle')
-  const timers = useRef<number[]>([])
+  const ritual = useRef<Ritual | null>(null)
 
   const byChapter = useMemo(() => new Map(scenes.map((s) => [s.chapter, s])), [scenes])
 
-  useEffect(() => {
-    if (chapterIndex === active) return
+  const cancelRitual = () => {
+    const r = ritual.current
+    if (!r) return
+    r.cancelled = true
+    r.timers.forEach((t) => window.clearTimeout(t))
+    ritual.current = null
+  }
 
-    const clear = () => {
-      timers.current.forEach((t) => window.clearTimeout(t))
-      timers.current = []
+  useEffect(() => {
+    if (chapterIndex === active) {
+      // The reader crossed a boundary and came straight back before the swap
+      // fired. Nothing is going to change under the wash, so it comes off now
+      // rather than after a swap that no longer needs to happen. A ritual that
+      // has already swapped is left alone: its clear is pending and this
+      // render is the one its own setActive caused.
+      if (ritual.current && !ritual.current.swapped) {
+        cancelRitual()
+        onCoverChange?.(0)
+      }
+      return
     }
-    clear()
+
+    cancelRitual()
 
     if (reduced) {
       // No ritual for readers who asked for no motion: cut straight to the
@@ -72,23 +107,47 @@ export function SceneController({ scenes, onCoverChange, coverMs = 900 }: SceneC
       return
     }
 
-    phase.current = 'covering'
+    const r: Ritual = { timers: [], swapped: false, cancelled: false }
+    ritual.current = r
     onCoverChange?.(1)
-    timers.current.push(
+
+    r.timers.push(
       window.setTimeout(() => {
-        phase.current = 'swapping'
+        r.swapped = true
         setActive(chapterIndex)
       }, coverMs * 0.55),
     )
-    timers.current.push(
+    r.timers.push(
       window.setTimeout(() => {
-        phase.current = 'idle'
-        onCoverChange?.(0)
+        // The wash is the load cover. Its middle holds until the incoming
+        // scene's textures are resident, bounded, so the reader never watches
+        // a chapter assemble itself plate by plate as the wash lifts.
+        const incoming = byChapter.get(chapterIndex)?.assets ?? []
+        const warm = incoming.length ? prewarmTextures(incoming) : Promise.resolve()
+        const patience = new Promise<void>((resolve) => {
+          r.timers.push(window.setTimeout(resolve, Math.max(0, maxHoldMs - coverMs)))
+        })
+        void Promise.race([warm, patience]).then(() => {
+          if (r.cancelled) return
+          ritual.current = null
+          onCoverChange?.(0)
+        })
       }, coverMs),
     )
+    // Deliberately no cleanup here: the swap timer changes `active`, which
+    // re-runs this effect, and a cleanup would cancel the clear timer in the
+    // same breath — leaving the wash up for good. Cancellation is explicit,
+    // above, and on unmount below.
+  }, [chapterIndex, active, byChapter, coverMs, maxHoldMs, onCoverChange, reduced])
 
-    return clear
-  }, [chapterIndex, active, coverMs, onCoverChange, reduced])
+  useEffect(
+    () => () => {
+      cancelRitual()
+      onCoverChange?.(0)
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  )
 
   // Texture residency: the neighbours of the active scene stay warm — the
   // next so the swap into it is free, the previous so scrolling back is too —

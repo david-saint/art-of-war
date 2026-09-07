@@ -23,6 +23,10 @@ export function HeroSection() {
           style={{ opacity: entered ? 1 : 0 }}
         >
           Scroll to begin the count
+          <span className="hidden sm:inline">
+            <span className="mx-3 opacity-50">·</span>
+            or press space and let it play
+          </span>
         </p>
       </div>
     </section>

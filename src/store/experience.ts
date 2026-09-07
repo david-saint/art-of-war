@@ -58,6 +58,15 @@ export type ExperienceState = {
   setHudVisible: (on: boolean) => void
   menuOpen: boolean
   setMenuOpen: (on: boolean) => void
+
+  /**
+   * The page is scrolling itself. A session flag, never persisted: a page
+   * that starts moving on its own when you come back to it is a page you
+   * did not ask to move.
+   */
+  autoplay: boolean
+  setAutoplay: (on: boolean) => void
+  toggleAutoplay: () => void
 }
 
 export const useExperience = create<ExperienceState>()(
@@ -110,6 +119,10 @@ export const useExperience = create<ExperienceState>()(
       setHudVisible: (hudVisible) => set({ hudVisible }),
       menuOpen: false,
       setMenuOpen: (menuOpen) => set({ menuOpen }),
+
+      autoplay: false,
+      setAutoplay: (autoplay) => set({ autoplay }),
+      toggleAutoplay: () => set({ autoplay: !get().autoplay }),
     }),
     {
       name: 'bingfa.v1',

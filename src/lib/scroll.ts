@@ -235,6 +235,22 @@ function resolveBeat(chapter: number, focus: number): number {
   return beat
 }
 
+/**
+ * The pace multiplier of whatever beat holds the focus line, from its
+ * `data-autoplay-pace` attribute; 1 where none is set. Used by the autoplay
+ * director so a flowing column of prose can be walked more slowly than a held
+ * frame, without the director knowing anything about the page's structure.
+ */
+export function paceAt(focus: number): number {
+  for (const b of measuredBeats) {
+    if (focus >= b.top && focus < b.top + b.height) {
+      const v = Number(b.el.dataset.autoplayPace)
+      return Number.isFinite(v) && v > 0 ? v : 1
+    }
+  }
+  return 1
+}
+
 function frame(now: number) {
   const dt = lastTime ? Math.min((now - lastTime) / 1000, 1 / 15) : 1 / 60
   lastTime = now
