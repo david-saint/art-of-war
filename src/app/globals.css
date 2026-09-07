@@ -121,6 +121,7 @@ html[data-ground='paper'] {
   --fg-faint: var(--color-ink-400);
   --surface: var(--color-paper-100);
   --scrim: rgb(232 226 212 / 0.55);
+  --wash-edge: var(--color-paper-300);
   --accent-quiet: var(--color-gold-700);
 }
 
@@ -133,6 +134,7 @@ html[data-ground='ink'] {
   --fg-faint: var(--color-ink-400);
   --surface: var(--color-ink-950);
   --scrim: rgb(11 15 14 / 0.62);
+  --wash-edge: var(--color-ink-900);
   --accent-quiet: var(--color-gold-500);
 }
 
@@ -142,6 +144,7 @@ html {
   --fg-faint: var(--color-ink-400);
   --surface: var(--color-ink-950);
   --scrim: rgb(11 15 14 / 0.78);
+  --wash-edge: var(--color-ink-900);
   --accent-quiet: var(--color-gold-500);
 }
 
@@ -183,6 +186,61 @@ body {
 }
 .letterbox--top { top: 0; }
 .letterbox--bottom { bottom: 0; }
+
+/*
+ * The frame scrim.
+ *
+ * One sheet of diluted ground laid over the picture wherever the chapter's
+ * copy sits, so type reads against a plate that was painted for daylight. It
+ * is a single fixed layer, not a gradient inside each beat's box: a scrim that
+ * belongs to a box has the box's edges, and the moment a beat is lit before
+ * its sticky container has pinned — which is every chapter's first beat — the
+ * top of that box draws a hard horizontal line across the frame.
+ *
+ * The solid stop has a floor in rem, so on a narrower viewport the sheet
+ * simply covers more of the frame rather than fading out under the column.
+ */
+.frame-scrim {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    100deg,
+    var(--scrim) 0%,
+    var(--scrim) max(46%, 46rem),
+    transparent max(72%, 46rem + 26vw)
+  );
+  opacity: 0;
+  transition: opacity var(--dur-beat) var(--ease-soak);
+}
+.frame-scrim[data-on='1'] { opacity: 1; }
+
+/*
+ * THE WASH — the chapter-boundary cover.
+ *
+ * Water on wet ink: the outgoing chapter loses its identity to the ground, the
+ * scene is swapped underneath, and the new chapter surfaces as the sheet
+ * clears. It is never a crossfade of two views — that is banned as a camera
+ * operation — and it is never tinted: the wash is the ground itself, paper on
+ * paper chapters, ink on the two night chapters, edged with the aged value the
+ * way a real wash pools darker where it dries last.
+ *
+ * The in and out durations are set inline by the component so they stay in
+ * step with the scene controller's clock.
+ */
+.ink-wash {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-scrim);
+  pointer-events: none;
+  background: radial-gradient(120% 100% at 50% 50%, var(--surface) 38%, var(--wash-edge) 100%);
+  opacity: 0;
+  transition: opacity var(--wash-out, 900ms) var(--ease-drift);
+}
+.ink-wash[data-cover='1'] {
+  opacity: 1;
+  transition: opacity var(--wash-in, 600ms) var(--ease-soak);
+}
 
 /* Ground-relative type colour. Components never name an ink or paper value
    directly — they say how loud the text is and let the ground decide. */

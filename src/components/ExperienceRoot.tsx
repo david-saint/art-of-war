@@ -1,14 +1,17 @@
 'use client'
 
 import dynamic from 'next/dynamic'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { preload } from 'react-dom'
 import { Letterbox } from './Letterbox'
 import { WarCouncilHUD } from './WarCouncilHUD'
 import { EnterGate } from './EnterGate'
 import { GroundSync } from './GroundSync'
 import { AudioDirector } from './AudioDirector'
+import { AutoplayDirector } from './AutoplayDirector'
 import { CodexView } from './CodexView'
+import { FrameScrim } from './FrameScrim'
+import { InkWash } from './InkWash'
 import { useScrollEngine } from '@/lib/useScroll'
 import { useExperience } from '@/store/experience'
 import { hasWebGL, pinnedQuality, probeQuality } from '@/three/quality'
@@ -47,9 +50,21 @@ const Chapter12Scene = dynamic(() => import('@/three/scenes/Chapter12Scene').the
 /** Chapters whose physics differ enough to warrant their own set. */
 const BESPOKE: Record<number, React.ComponentType> = { 6: Chapter06Scene, 12: Chapter12Scene }
 
+/** Authored length of the chapter-boundary wash. See SceneController. */
+const WASH_MS = 1100
+
 export function ExperienceRoot() {
   useScrollEngine()
   const [webgl, setWebgl] = useState<boolean | null>(null)
+
+  // The scene controller reports the cover it wants and this writes it onto
+  // the wash element directly. Routing it through state would re-render the
+  // component that owns the <Canvas> on every chapter boundary, for a value
+  // only one div reads.
+  const washRef = useRef<HTMLDivElement>(null)
+  const onCoverChange = useCallback((cover: number) => {
+    washRef.current?.setAttribute('data-cover', cover >= 0.5 ? '1' : '0')
+  }, [])
 
   // Emitted as <link rel="preload"> in the server HTML, at low priority so the
   // gate's own type and fonts are never behind a plate. crossOrigin makes the
@@ -96,11 +111,16 @@ export function ExperienceRoot() {
     <>
       {webgl ? (
         <Stage>
-          <SceneController scenes={scenes} />
+          <SceneController scenes={scenes} onCoverChange={onCoverChange} coverMs={WASH_MS} />
         </Stage>
       ) : null}
+      {/* Order matters: the scrim paints between the canvas and the sections
+          that follow this component in the document, by tree order. */}
+      <FrameScrim />
       <GroundSync />
       <AudioDirector />
+      <AutoplayDirector />
+      <InkWash ref={washRef} coverMs={WASH_MS} />
       <Letterbox />
       <WarCouncilHUD />
       <CodexView />

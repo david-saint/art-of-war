@@ -28,6 +28,8 @@ export function WarCouncilHUD() {
   const setAudioEnabled = useExperience((s) => s.setAudioEnabled)
   const visited = useExperience((s) => s.visited)
   const markVisited = useExperience((s) => s.markVisited)
+  const autoplay = useExperience((s) => s.autoplay)
+  const toggleAutoplay = useExperience((s) => s.toggleAutoplay)
 
   useEffect(() => {
     if (chapterIndex > 0) markVisited(chapterIndex)
@@ -115,6 +117,18 @@ export function WarCouncilHUD() {
         className="fixed inset-x-0 flex items-start justify-end gap-6 px-[var(--hud-inset)] pt-4"
         style={{ zIndex: 'var(--z-hud)', top: 'var(--letterbox-bar)' }}
       >
+        {/* The projector. Hidden in the Codex, which is a document, not a film. */}
+        {mode === 'story' ? (
+          <button
+            type="button"
+            onClick={toggleAutoplay}
+            className={`font-mono text-micro uppercase tracking-[0.3em] transition-colors hover:opacity-100 hover:[color:var(--fg)] ${autoplay ? 't-gold' : 't-muted'}`}
+            aria-pressed={autoplay}
+            title={autoplay ? 'Pause (space)' : 'Let it play (space)'}
+          >
+            {autoplay ? 'Pause' : 'Play'}
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={toggleMode}
